@@ -2,6 +2,20 @@
 
 Pick-up notes for the map tool build. Full architecture in `MAPTOOL_DESIGN.md`.
 
+## Status board
+
+| Slice | What | State |
+|---|---|---|
+| 1 | Data + render core (`MapData`, `MapRenderer`, `TileDefinition`) | ✅ done |
+| 2 | Palette + painting (dock, picking, place/erase, undo) | ✅ verified in editor |
+| 3 | GridManager "pull" — game reads `MapData` not `GridMap` | ✅ done (GridMap node removed, runtime confirmed) |
+| 3b | Input picking — mouse → terrain cell via DDA (entities still physics) | ✅ done (builds; quick playtest pending) |
+| **4** | **Object layer — trees/barrels as PackedScene obstacles** | ⏭️ **NEXT SESSION** |
+
+Build is green (`dotnet build Riminity.csproj`, 0/0). Detailed per-slice notes below; **the Slice 4 plan is at the very bottom.**
+
+---
+
 ## Status: Slice 2 VERIFIED ✅ (palette + painting works in editor)
 
 Paint / erase confirmed working in the live editor. Two fixes landed during verify: tile mesh uses a **bottom-center pivot** so `CellToLocal` shifts X/Z by +0.5 but NOT Y (Blockbench export sits on its base); and the dock migrated to the **Godot 4.6 `EditorDock` API** (`MaptoolDock : EditorDock`, `AddDock`/`RemoveDock`, dock owns `Title`+`DefaultSlot`) — replaces the now-obsolete `AddControlToDock`. `MaptoolDock.cs` is `#if TOOLS` (EditorDock is editor-only).
@@ -63,17 +77,46 @@ New 3D scene → add `MapRenderer` node → `Map` = New MapData → set `Palette
 4. **Hot-reload orphans.** Editor script reloads reset in-memory fields but leave spawned children alive. `Clear()` sweeps the live tree for `_maptool_visual`-tagged nodes and uses immediate `Free()` (not `QueueFree`). Pre-fix ghosts clear with a one-time scene reload.
 5. **Half-cell offset.** `CellToLocal` shifts by `+0.5` per axis so cubes align to gridlines and floor cells sit on `y=0`. **`GridManager.CellToWorld` must match this when integrated.**
 
-## Next: Slice 3 — GridManager integration (the "pull")
+## Slice 3 — GridManager integration (the "pull") — DONE ✅
 
-Goal: game reads terrain from `MapData` instead of `GridMap`. One-directional (game→addon); addon stays game-agnostic. See design doc *GridManager integration*.
+`Scripts/Singletons/GridManager.cs` reads terrain from `MapRenderer.Map` (`MapData`) instead of `GridMap`. One-directional: `using Moonbreak.Maptool;` in the game; addon references nothing game-side. Old `GridMap` node removed from `World.tscn`; grid generates correctly at runtime.
 
-1. Replace `FindGridMap()` + `gridMap.GetUsedCells()` (in `Scripts/Singletons/GridManager.cs`) with reading the scene's `MapData`.
-2. Walkable derivation unchanged: cell is walkable if solid and nothing at `cell + Up`.
-3. **Match the half-cell offset:** `GridManager.CellToWorld` must mirror `MapRenderer.CellToLocal` (`+0.5` per axis). See gotcha #5.
-4. Coordinate conversion → regular grid, cell size 1 (or read `MapRenderer.CellSize`).
+What changed (all internal — public `CellToWorld`/`WorldToCell` signatures + world coords unchanged, so the ~40 call sites across Character/AI/Actions are untouched):
+- `_gridMap` field → `_renderer` (MapRenderer). Node detection (`OnNodeAdded`/`OnNodeRemoved`/`FindMap`) keys off `MapRenderer` by type (`FindRenderer` recursive scan — node can be named anything).
+- `BuildGraph(MapRenderer)` derives walkable cells from `map.Enumerate()` (solid + nothing at `cell+Up`). Same derivation, new source.
+- `CellToWorld`: X/Z `+0.5` (matches `MapRenderer.CellToLocal` pivot), Y on top face (`cell.Y + 1`). Mathematically identical to the old GridMap output → no behaviour change for callers.
+- `WorldToCell`: inverse via `_renderer.ToLocal` + floor, `-0.01` Y bias. `InvalidateCell` reads `map.HasCell`.
 
-Blocked on Slice 2 in-editor verification first (see checklist above).
+## Slice 3b — Input picking (terrain has no colliders) — DONE ✅
 
-### Also worth doing soon
-- "+ New Tile" authoring in the dock (write `.tres` to `res://Tiles/Definitions/`) — removes the hand-create step.
-- Box/Flood modes + ghost preview (`IEditMode.GetPreview` from the design's interface — not yet on our lean `IEditMode`).
+MapData terrain has no physics colliders by design, so the old `ObjectUnderMouse` raycast can't find the ground cell. Split the picking: **entities = physics, terrain = voxel march** (the "double setup", now intentional).
+- `CellPicker.Pick` gained `allowPlaneFallback` (default true for editor; gameplay passes false → clean miss off-map).
+- `GridManager.TryPickCell(camera, screenPos, out cell)` — façade: mouse ray → renderer-local → DDA through `MapData` → solid cell. No plane fallback.
+- `Scripts/InteractionManager.cs` — 4 ground-pick sites swapped to `TryPickCell` (left-click move, `TryGetHoverCell`, skill preview, hover path preview). Character select / right-click inspect+interact / occupant targeting still use `ObjectUnderMouse` (entities are real colliders).
+- **Known soft edge (accepted):** `TryPickCell` returns the solid cell the ray strikes; clicking the vertical *side* of a tall ledge returns that side cell (no-ops if unreachable). Snap-to-column-top deferred — revisit if it feels wrong on terraced maps.
+
+### Quick playtest still pending (not blocking)
+Run game → left-click moves on painted terrain, hover shows path+AP, skills target cells+entities, character select works. Spawns may need nudging onto the new terrain shape.
+
+---
+
+## NEXT SESSION → Slice 4 — Object layer (the second half of the two-layer model)
+
+Terrain (bulk static cells) is done. Objects = sparse, destructible things that are real nodes, NOT MapData cells. See `MAPTOOL_DESIGN.md` "Layers" + "Objects".
+
+**Goal:** trees / barrels as `PackedScene` nodes that self-register as grid obstacles, block LOS, and become walkable on death — reusing the existing `ExplodingBarrel` pattern (`Scripts/Objects/ExplodingBarrel.cs`).
+
+**Pattern to follow (already proven by ExplodingBarrel):**
+- Real `StaticBody3D` + `Health` child. Has a collider → entity picking (physics) already handles selection/interaction. No DDA work needed for objects.
+- On `GridManager.GraphBuilt` (signal exists): compute its cell via `WorldToCell(GlobalPosition)` and call `GridManager.RegisterObstacle(cell, this)`.
+- On death (`Health.OnDepleted`): `UnregisterObstacle(cell)` → cell becomes walkable again. Trees stack at `cell + Up`, block LOS via existing Bresenham (`HasLineOfSight` already checks `_obstacles`).
+
+**Open questions to resolve first next session:**
+1. **Authoring:** how do objects get placed? Option A — hand-place in the scene like barrels are now (simplest, ships the prototype). Option B — an "object mode" in the map tool dock that instantiates a chosen PackedScene at the picked cell (matches the design's tool ownership, more work). *Lean A for now, B when pain shows.*
+2. **Where object PackedScenes live + how the tool lists them** (mirror `TileLibrary` folder-scan for object prefabs? or just a scene-author concern?). Tied to Q1.
+3. Does the existing `ExplodingBarrel` already register correctly against the new `MapData`-sourced graph? Verify its `GraphBuilt` hook + `WorldToCell` still land on the right cell on the terraced map before generalizing the pattern to trees.
+
+**Lower priority / deferred (pick up when relevant):**
+- `TileDefinition.bWalkable` not yet consulted (water/lava non-walkable tiles) — current walkable rule is purely geometric.
+- Editor authoring polish: "+ New Tile" dock flow (write `.tres` to `res://Tiles/Definitions/`); Box/Flood fill modes + ghost preview (`IEditMode.GetPreview`, not on our lean interface yet); scroll-wheel layer change.
+- Side-hit → column-top snap in `TryPickCell` (see Slice 3b soft edge).

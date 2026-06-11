@@ -20,8 +20,11 @@ namespace Moonbreak.Maptool
     {
         // localOrigin / localDir: ray already transformed into the renderer's local space.
         // cellSize: renderer cell size. activeLayer: Y of the build plane for void placement.
+        // allowPlaneFallback: editor painting wants the active-layer plane catch (build into the
+        // void); gameplay picking wants a clean miss when the ray leaves the terrain.
         public static PickResult Pick(MapData map, Vector3 localOrigin, Vector3 localDir,
-                                      float cellSize, int activeLayer, int maxSteps = 256)
+                                      float cellSize, int activeLayer, bool allowPlaneFallback = true,
+                                      int maxSteps = 256)
         {
             if (map == null || cellSize <= 0f)
             {
@@ -36,6 +39,11 @@ namespace Moonbreak.Maptool
             if (dda.Hit)
             {
                 return dda;
+            }
+
+            if (!allowPlaneFallback)
+            {
+                return PickResult.Miss;
             }
 
             // Void fallback: intersect the active-layer plane so floors can be painted into empty space.
