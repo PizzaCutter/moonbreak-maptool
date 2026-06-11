@@ -86,6 +86,27 @@ namespace Moonbreak.Maptool
             Rebuild();
         }
 
+        // Undo funnel: the editor-plugin layer routes every terrain diff through here via
+        // EditorUndoRedoManager do/undo. forward=true applies new tiles, false restores old.
+        // Kept on the renderer (not the plugin) so the call target is the scene node the undo
+        // history is anchored to. Marshalable signature (MapEdit RefCounted + bool) for Variant args.
+        public void ApplyEdit(MapEdit edit, bool forward)
+        {
+            if (Map == null || edit == null)
+            {
+                return;
+            }
+            if (forward)
+            {
+                edit.ApplyForward(Map);
+            }
+            else
+            {
+                edit.ApplyReverse(Map);
+            }
+            Rebuild();
+        }
+
         // --- Internals ---
 
         private void Clear()
@@ -108,6 +129,15 @@ namespace Moonbreak.Maptool
         private void BuildTileIndex()
         {
             _tileById = new Dictionary<string, TileDefinition>();
+            // Folder-scan discovery is the default source (drop a .tres in → it resolves).
+            foreach (var def in TileLibrary.GetAll())
+            {
+                if (def != null && !string.IsNullOrEmpty(def.Id))
+                {
+                    _tileById[def.Id] = def;
+                }
+            }
+            // Explicit Tiles array overrides discovery — handy for tests / one-off scenes.
             foreach (var def in Tiles)
             {
                 if (def != null && !string.IsNullOrEmpty(def.Id))
@@ -144,11 +174,12 @@ namespace Moonbreak.Maptool
         }
 
         // Cell (0,0,0) fills the volume [0,1]³ → cube edges land on integer gridlines, and a
-        // floor cell sits ON the y=0 plane (bottom at 0). Centered meshes need this half-cell
-        // shift; the renderer owns alignment so tile meshes don't need corner pivots.
+        // floor cell sits ON the y=0 plane (bottom at 0). Tile meshes use a bottom-center pivot
+        // (centered on X/Z, origin on the bottom face — the natural Blockbench export), so we
+        // shift half a cell on X/Z to center them but NOT on Y, where the mesh is already grounded.
         private Vector3 CellToLocal(Vector3I cell)
         {
-            return (new Vector3(cell.X, cell.Y, cell.Z) + new Vector3(0.5f, 0.5f, 0.5f)) * CellSize;
+            return (new Vector3(cell.X, cell.Y, cell.Z) + new Vector3(0.5f, 0f, 0.5f)) * CellSize;
         }
     }
 }

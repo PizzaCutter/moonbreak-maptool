@@ -2,6 +2,41 @@
 
 Pick-up notes for the map tool build. Full architecture in `MAPTOOL_DESIGN.md`.
 
+## Status: Slice 2 VERIFIED ✅ (palette + painting works in editor)
+
+Paint / erase confirmed working in the live editor. Two fixes landed during verify: tile mesh uses a **bottom-center pivot** so `CellToLocal` shifts X/Z by +0.5 but NOT Y (Blockbench export sits on its base); and the dock migrated to the **Godot 4.6 `EditorDock` API** (`MaptoolDock : EditorDock`, `AddDock`/`RemoveDock`, dock owns `Title`+`DefaultSlot`) — replaces the now-obsolete `AddControlToDock`. `MaptoolDock.cs` is `#if TOOLS` (EditorDock is editor-only).
+
+**Gotchas hit during verify (not bugs):**
+- Delete + re-add the `MapRenderer` node → you get a *fresh empty `MapData`* (0 cells) → renders nothing. The old map's cells don't follow a new node.
+- Paint silently no-ops if no tile is selected in the dock (PlaceMode needs `CurrentTileId`).
+
+**Decision resolved (was flagged):** plugin entry rewritten in **C#**, not GDScript. Whole addon is one C# assembly; a GDScript bootstrap would split the language boundary exactly where picking + undo live. `plugin.gd` deleted; `plugin.cfg` → `script="MaptoolPlugin.cs"`.
+
+### New files (Slice 2)
+- **`FuzzySearch.cs`** — private copy in `Moonbreak.Maptool` (NOT shared w/ console, per design).
+- **`TileLibrary.cs`** — folder-scan of `res://Tiles/Definitions/*.tres` → `TileDefinition` list, cached. `Refresh()` to rescan. Dir lives in the GAME (defs reference game meshes) — keeps addon submodule-clean.
+- **`CellPicker.cs`** — `PickResult` + Amanatides–Woo DDA voxel march through `MapData` (first solid cell + entry-face normal) with active-layer **plane fallback** for void placement. Pure math, local space, no colliders.
+- **`MapEdit.cs`** — `RefCounted` reversible diff (cell, oldId, newId). `ApplyForward/Reverse(MapData)`. The undo unit; knows nothing about undo itself.
+- **`IEditMode.cs`** + **`PlaceMode.cs`** (hit+face, or plane cell) + **`EraseMode.cs`** (clears hit cell only). Single-pick, commit-immediately.
+- **`MaptoolDock.cs`** — `VBoxContainer` dock built in code: Place/Erase toggle, build-layer ±, fuzzy search box, tile `ItemList`, Refresh. Raises C# events; touches no core state.
+- **`MaptoolPlugin.cs`** — `[Tool] EditorPlugin`, the ONLY editor-API holder. `_Handles/_Edit/_MakeVisible` track the selected `MapRenderer`; `_Forward3DGuiInput` left-click → `CellPicker` → active `IEditMode` → wrap `MapEdit` in `EditorUndoRedoManager` (`ApplyEdit` do/undo on the renderer). Manages the translucent active-layer plane (owner=null, meta-tagged, survives `Rebuild`).
+
+### MapRenderer changes
+- `ApplyEdit(MapEdit, bool forward)` — the undo funnel target (on the renderer so undo history anchors to the scene node).
+- `BuildTileIndex` now seeds from `TileLibrary.GetAll()`; explicit `Tiles` array still overrides (for tests).
+
+### Verify-in-editor checklist (DO FIRST next session)
+1. Build inside Godot (not just CLI) + restart editor so the C# plugin loads.
+2. Create a `TileDefinition` `.tres` in `res://Tiles/Definitions/` (set `Id`, assign a `Mesh`). No defs yet → palette empty + placed cells render magenta (expected, still proves picking/undo).
+3. Select a `MapRenderer` (with a `Map`) in a 3D scene → "Map Tool" dock appears (RightUl). Pick a tile, **Place** mode, click in viewport → cell appears against the aimed face. Click empty space → cell drops on the build-layer plane (cyan). **Erase** removes the hit cell. **Ctrl+Z / Ctrl+Y** undo/redo. Saved `.tscn` stays tiny.
+
+### Known gaps / deferred to next
+- Layer change via viewport scroll-wheel NOT wired (would hijack camera zoom) — dock ± buttons only. Design mentions scroll; revisit w/ a modifier if wanted.
+- No drag-paint (each click = 1 undo action). Box/Flood modes + ghost preview (`GetPreview`) still deferred.
+- "+ New Tile" authoring flow in the dock NOT built — tiles hand-created as `.tres` for now.
+
+---
+
 ## Status: Slice 1 DONE ✅ (data + render core)
 
 Verified working in editor **and** at runtime: a hand-authored `MapData` renders as grid-aligned cubes, the saved `.tscn` stays tiny (no per-cell nodes serialized).
@@ -28,16 +63,17 @@ New 3D scene → add `MapRenderer` node → `Map` = New MapData → set `Palette
 4. **Hot-reload orphans.** Editor script reloads reset in-memory fields but leave spawned children alive. `Clear()` sweeps the live tree for `_maptool_visual`-tagged nodes and uses immediate `Free()` (not `QueueFree`). Pre-fix ghosts clear with a one-time scene reload.
 5. **Half-cell offset.** `CellToLocal` shifts by `+0.5` per axis so cubes align to gridlines and floor cells sit on `y=0`. **`GridManager.CellToWorld` must match this when integrated.**
 
-## Next: Slice 2 — palette + painting
+## Next: Slice 3 — GridManager integration (the "pull")
 
-Goal: place tiles by clicking in the editor viewport, no more hand-typing `PackedCells`.
+Goal: game reads terrain from `MapData` instead of `GridMap`. One-directional (game→addon); addon stays game-agnostic. See design doc *GridManager integration*.
 
-Suggested order (see design doc sections *Cell picking*, *Edit modes*, *Height authoring*):
-1. **Tile discovery** — folder-scan `TileDefinition` `.tres` into the renderer's tile library (replaces the manual `Tiles` array).
-2. **Palette UI** — editor dock, grid of tiles, fuzzy search. **Copy `FuzzySearch` into the addon namespace** (`Moonbreak.Maptool`) — do NOT reference the console's copy.
-3. **Picking** — DDA voxel ray-march through `MapData` + active-layer plane fallback. Pure math, no colliders.
-4. **`IEditMode`** — start with `PlaceMode` + `EraseMode`; each returns a `MapEdit` diff.
-5. **Undo** — wrap `MapEdit` in `EditorUndoRedoManager`, isolated to the plugin layer.
+1. Replace `FindGridMap()` + `gridMap.GetUsedCells()` (in `Scripts/Singletons/GridManager.cs`) with reading the scene's `MapData`.
+2. Walkable derivation unchanged: cell is walkable if solid and nothing at `cell + Up`.
+3. **Match the half-cell offset:** `GridManager.CellToWorld` must mirror `MapRenderer.CellToLocal` (`+0.5` per axis). See gotcha #5.
+4. Coordinate conversion → regular grid, cell size 1 (or read `MapRenderer.CellSize`).
 
-### Decision to make first next session
-`plugin.gd` is GDScript. Viewport input (`_forward_3d_gui_input`) and `EditorUndoRedoManager` access live on the **EditorPlugin**. Decide: keep `plugin.gd` as a thin GDScript bootstrap that hands off to a C# tool, or rewrite the plugin entry in C#. Picking + undo both need this resolved.
+Blocked on Slice 2 in-editor verification first (see checklist above).
+
+### Also worth doing soon
+- "+ New Tile" authoring in the dock (write `.tres` to `res://Tiles/Definitions/`) — removes the hand-create step.
+- Box/Flood modes + ghost preview (`IEditMode.GetPreview` from the design's interface — not yet on our lean `IEditMode`).
