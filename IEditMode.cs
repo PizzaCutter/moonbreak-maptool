@@ -12,8 +12,15 @@ namespace Moonbreak.Maptool
     {
         string Name { get; }
 
+        // true → plugin waits for mouse-UP before calling Commit (BoxFill drag pattern).
+        // false → plugin commits immediately on mouse-DOWN (Place/Erase/FloodFill pattern).
+        bool IsDragMode => false;
+
         // A click landed. map is read-only context for computing old tiles; do NOT mutate it here.
         void OnPick(MapData map, PickResult pick);
+
+        // Called on mouse-UP for drag modes; non-drag modes leave this as a no-op.
+        void OnDragEnd(MapData map, PickResult pick) { }
 
         // The diff to apply, or null if this pick changes nothing (e.g. erasing empty space).
         MapEdit Commit();

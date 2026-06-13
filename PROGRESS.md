@@ -12,7 +12,7 @@ Pick-up notes for the map tool build. Full architecture in `MAPTOOL_DESIGN.md`.
 | 3b | Input picking — mouse → terrain cell via DDA (entities still physics) | ✅ done (builds; quick playtest pending) |
 | **4** | **Object layer — trees/barrels as PackedScene obstacles** | ✅ done |
 | 5a | Ghost preview — hover cell highlights what the mode would paint | ✅ done |
-| **5b** | **Box fill + flood fill edit modes** | ⏭️ **NEXT SESSION** |
+| **5b** | **Box fill + flood fill edit modes** | ✅ done |
 
 Build is green (`dotnet build Riminity.csproj`, 0/0). Detailed per-slice notes below; **the Slice 4 plan is at the very bottom.**
 

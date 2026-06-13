@@ -15,12 +15,23 @@ namespace Moonbreak.Maptool
 
         private readonly PlaceMode _placeMode = new();
         private readonly EraseMode _eraseMode = new();
+        private readonly BoxFillMode _boxFillMode = new();
+        private readonly FloodFillMode _floodFillMode = new();
 
         // Derived, not cached: a C# hot-reload reconstructs the plugin WITHOUT re-running _EnterTree,
-        // so any field only assigned there comes back null. _placeMode/_eraseMode have field
-        // initializers (survive reload) and _bErase defaults to false → ActiveMode is never null.
-        private bool _bErase;
-        private IEditMode ActiveMode => _bErase ? _eraseMode : _placeMode;
+        // so any field only assigned there comes back null. The mode instances have field initializers
+        // (survive reload) and _modeId defaults to Place → ActiveMode is never null.
+        private enum EditModeId { Place, Erase, BoxFill, FloodFill }
+        private EditModeId _modeId = EditModeId.Place;
+        private IEditMode ActiveMode => _modeId switch
+        {
+            EditModeId.Erase     => _eraseMode,
+            EditModeId.BoxFill   => _boxFillMode,
+            EditModeId.FloodFill => _floodFillMode,
+            _                    => _placeMode,
+        };
+
+        private bool _bDragging;
 
         private int _activeLayer;
         private MeshInstance3D _plane;
@@ -35,8 +46,26 @@ namespace Moonbreak.Maptool
         public override void _EnterTree()
         {
             _dock = new MaptoolDock();
-            _dock.TileSelected += id => { _placeMode.CurrentTileId = id; ClearGhosts(); };
-            _dock.EraseModeChanged += erase => { _bErase = erase; ClearGhosts(); };
+            _dock.TileSelected += id =>
+            {
+                _placeMode.CurrentTileId = id;
+                _boxFillMode.CurrentTileId = id;
+                _floodFillMode.CurrentTileId = id;
+                ClearGhosts();
+            };
+            _dock.ModeChanged += name =>
+            {
+                _modeId = name switch
+                {
+                    "Erase"     => EditModeId.Erase,
+                    "BoxFill"   => EditModeId.BoxFill,
+                    "FloodFill" => EditModeId.FloodFill,
+                    _           => EditModeId.Place,
+                };
+                ActiveMode.Cancel();
+                _bDragging = false;
+                ClearGhosts();
+            };
             _dock.LayerChanged += layer => { _activeLayer = layer; UpdatePlane(); };
             _dock.RefreshRequested += () => _renderer?.Rebuild();
             AddDock(_dock);  // dock carries its own Title + DefaultSlot (set in MaptoolDock ctor)
@@ -85,48 +114,77 @@ namespace Moonbreak.Maptool
                 return (int)AfterGuiInput.Pass;  // never consume motion — camera still needs it
             }
 
-            if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
+            if (@event is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)
             {
-                if (Paint(viewportCamera, mb.Position))
+                if (mb.Pressed)
                 {
-                    UpdateGhost(viewportCamera, mb.Position);  // refresh so ghost tracks the new map state
+                    bool consumed = BeginInput(viewportCamera, mb.Position);
+                    if (consumed) UpdateGhost(viewportCamera, mb.Position);
+                    return consumed ? (int)AfterGuiInput.Stop : (int)AfterGuiInput.Pass;
+                }
+                if (!mb.Pressed && _bDragging)
+                {
+                    EndDrag(viewportCamera, mb.Position);
+                    UpdateGhost(viewportCamera, mb.Position);
                     return (int)AfterGuiInput.Stop;
                 }
             }
             return (int)AfterGuiInput.Pass;
         }
 
-        // Resolve the ray → run the active mode → wrap its diff in one undoable action.
-        private bool Paint(Camera3D camera, Vector2 mousePos)
+        // Mouse-down: anchor drag modes or commit single-click modes immediately.
+        private bool BeginInput(Camera3D camera, Vector2 mousePos)
         {
-            MapData map = _renderer.Map;
+            PickResult pick = PickFromMouse(camera, mousePos);
+            if (!pick.Hit) return false;
 
-            // Ray into the renderer's local space (renderer may be translated/rotated in the scene).
-            Transform3D inv = _renderer.GlobalTransform.AffineInverse();
-            Vector3 localOrigin = inv * camera.ProjectRayOrigin(mousePos);
-            Vector3 localDir = (inv.Basis * camera.ProjectRayNormal(mousePos)).Normalized();
-
-            PickResult pick = CellPicker.Pick(map, localOrigin, localDir, _renderer.CellSize, _activeLayer);
-            if (!pick.Hit)
-            {
-                return false;
-            }
-            
             IEditMode mode = ActiveMode;
-            mode.OnPick(map, pick);
+            mode.OnPick(_renderer.Map, pick);
+
+            if (mode.IsDragMode)
+            {
+                _bDragging = true;
+                return true;
+            }
+
             MapEdit edit = mode.Commit();
             mode.Cancel();
-            if (edit == null || edit.Count == 0)
-            {
-                return true;  // a valid click that changed nothing (e.g. erasing empty) — still consume
-            }
+            if (edit == null || edit.Count == 0) return true;  // valid click, nothing changed
 
+            CommitEdit(mode.Name, edit);
+            return true;
+        }
+
+        // Mouse-up: finish a drag-mode edit and push it to undo history.
+        private void EndDrag(Camera3D camera, Vector2 mousePos)
+        {
+            _bDragging = false;
+            IEditMode mode = ActiveMode;
+            PickResult pick = PickFromMouse(camera, mousePos);
+
+            mode.OnDragEnd(_renderer.Map, pick);
+            MapEdit edit = mode.Commit();
+            mode.Cancel();
+
+            if (edit == null || edit.Count == 0) return;
+            CommitEdit(mode.Name, edit);
+        }
+
+        private PickResult PickFromMouse(Camera3D camera, Vector2 mousePos)
+        {
+            Transform3D inv = _renderer.GlobalTransform.AffineInverse();
+            Vector3 localOrigin = inv * camera.ProjectRayOrigin(mousePos);
+            Vector3 localDir    = (inv.Basis * camera.ProjectRayNormal(mousePos)).Normalized();
+            return CellPicker.Pick(_renderer.Map, localOrigin, localDir, _renderer.CellSize, _activeLayer);
+        }
+
+        private void CommitEdit(string modeName, MapEdit edit)
+        {
             EditorUndoRedoManager undo = GetUndoRedo();
-            undo.CreateAction(mode.Name + " tile");
+            undo.CreateAction(modeName + " tile");
             undo.AddDoMethod(_renderer, MapRenderer.MethodName.ApplyEdit, edit, true);
             undo.AddUndoMethod(_renderer, MapRenderer.MethodName.ApplyEdit, edit, false);
-            undo.CommitAction();  // executes the do → applies diff + rebuilds, marks scene dirty
-            return true;
+            undo.CommitAction();
         }
 
         // --- Ghost preview: translucent cells showing what the active mode would paint ---
@@ -136,18 +194,11 @@ namespace Moonbreak.Maptool
             ClearGhosts();
             if (_renderer?.Map == null) return;
 
-            Transform3D inv = _renderer.GlobalTransform.AffineInverse();
-            Vector3 localOrigin = inv * camera.ProjectRayOrigin(mousePos);
-            Vector3 localDir    = (inv.Basis * camera.ProjectRayNormal(mousePos)).Normalized();
-
-            PickResult pick = CellPicker.Pick(_renderer.Map, localOrigin, localDir,
-                                              _renderer.CellSize, _activeLayer);
+            PickResult pick = PickFromMouse(camera, mousePos);
             if (!pick.Hit) return;
 
             foreach (var (cell, tileId) in ActiveMode.GetPreview(_renderer.Map, pick))
-            {
                 SpawnGhost(cell, tileId);
-            }
         }
 
         private void SpawnGhost(Vector3I cell, string tileId)

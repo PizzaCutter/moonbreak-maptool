@@ -16,7 +16,7 @@ namespace Moonbreak.Maptool
     public partial class MaptoolDock : EditorDock
     {
         public Action<string> TileSelected;     // tile Id, or null when cleared
-        public Action<bool> EraseModeChanged;    // true = erase, false = place
+        public Action<string> ModeChanged;      // "Place" | "Erase" | "BoxFill" | "FloodFill"
         public Action<int> LayerChanged;
         public Action RefreshRequested;
 
@@ -46,12 +46,18 @@ namespace Moonbreak.Maptool
             var modeRow = new HBoxContainer();
             root.AddChild(modeRow);
             var group = new ButtonGroup();
-            var placeBtn = new Button { Text = "Place", ToggleMode = true, ButtonGroup = group, ButtonPressed = true };
-            var eraseBtn = new Button { Text = "Erase", ToggleMode = true, ButtonGroup = group };
-            placeBtn.Pressed += () => EraseModeChanged?.Invoke(false);
-            eraseBtn.Pressed += () => EraseModeChanged?.Invoke(true);
+            var placeBtn    = new Button { Text = "Place",     ToggleMode = true, ButtonGroup = group, ButtonPressed = true };
+            var eraseBtn    = new Button { Text = "Erase",     ToggleMode = true, ButtonGroup = group };
+            var boxFillBtn  = new Button { Text = "BoxFill",   ToggleMode = true, ButtonGroup = group };
+            var floodFillBtn = new Button { Text = "Flood",    ToggleMode = true, ButtonGroup = group };
+            placeBtn.Pressed     += () => ModeChanged?.Invoke("Place");
+            eraseBtn.Pressed     += () => ModeChanged?.Invoke("Erase");
+            boxFillBtn.Pressed   += () => ModeChanged?.Invoke("BoxFill");
+            floodFillBtn.Pressed += () => ModeChanged?.Invoke("FloodFill");
             modeRow.AddChild(placeBtn);
             modeRow.AddChild(eraseBtn);
+            modeRow.AddChild(boxFillBtn);
+            modeRow.AddChild(floodFillBtn);
 
             // --- Active layer ---
             var layerRow = new HBoxContainer();
