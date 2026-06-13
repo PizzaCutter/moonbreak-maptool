@@ -95,6 +95,12 @@ namespace Moonbreak.Maptool
             {
                 return false;
             }
+            
+            if (_mode == null)
+            {
+                GD.Print("_mode is invalid");
+                return false;
+            }
 
             _mode.OnPick(map, pick);
             MapEdit edit = _mode.Commit();
