@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Godot;
 
 namespace Moonbreak.Maptool
@@ -37,5 +38,12 @@ namespace Moonbreak.Maptool
         public MapEdit Commit() => _pending;
 
         public void Cancel() => _pending = null;
+
+        public IEnumerable<(Vector3I Cell, string TileId)> GetPreview(MapData map, PickResult pick)
+        {
+            if (string.IsNullOrEmpty(CurrentTileId) || !pick.Hit) yield break;
+            Vector3I target = pick.FromPlane ? pick.Cell : pick.Cell + pick.Normal;
+            yield return (target, CurrentTileId);
+        }
     }
 }

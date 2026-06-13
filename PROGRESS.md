@@ -10,7 +10,9 @@ Pick-up notes for the map tool build. Full architecture in `MAPTOOL_DESIGN.md`.
 | 2 | Palette + painting (dock, picking, place/erase, undo) | ✅ verified in editor |
 | 3 | GridManager "pull" — game reads `MapData` not `GridMap` | ✅ done (GridMap node removed, runtime confirmed) |
 | 3b | Input picking — mouse → terrain cell via DDA (entities still physics) | ✅ done (builds; quick playtest pending) |
-| **4** | **Object layer — trees/barrels as PackedScene obstacles** | ⏭️ **NEXT SESSION** |
+| **4** | **Object layer — trees/barrels as PackedScene obstacles** | ✅ done |
+| 5a | Ghost preview — hover cell highlights what the mode would paint | ✅ done |
+| **5b** | **Box fill + flood fill edit modes** | ⏭️ **NEXT SESSION** |
 
 Build is green (`dotnet build Riminity.csproj`, 0/0). Detailed per-slice notes below; **the Slice 4 plan is at the very bottom.**
 
@@ -75,7 +77,12 @@ New 3D scene → add `MapRenderer` node → `Map` = New MapData → set `Palette
 2. **New `[GlobalClass]` types need an in-editor Build + editor restart** to appear in inspector "New …" menus. CLI `dotnet build` does NOT update `global_script_class_cache.cfg`.
 3. **Editor doesn't re-run `_Ready` on data edits.** Preview refreshes only via the `Rebuild` button or re-assigning `Map` (setter triggers it). Edit modes will call `Rebuild()` automatically later.
 4. **Hot-reload orphans.** Editor script reloads reset in-memory fields but leave spawned children alive. `Clear()` sweeps the live tree for `_maptool_visual`-tagged nodes and uses immediate `Free()` (not `QueueFree`). Pre-fix ghosts clear with a one-time scene reload.
-5. **Half-cell offset.** `CellToLocal` shifts by `+0.5` per axis so cubes align to gridlines and floor cells sit on `y=0`. **`GridManager.CellToWorld` must match this when integrated.**
+5. **Hot-reload corrupts the plugin + tool-resources (the "all pink cubes + paint dead + `_mode is invalid`" trio).** A background C# rebuild reloads the assembly and reconstructs `MaptoolPlugin` *without* re-running `_EnterTree`:
+   - Any field only assigned in `_EnterTree` comes back null. Fixed for the mode by deriving `ActiveMode` from `_placeMode`/`_eraseMode` (field initializers → survive reload) + a `_bErase` bool, instead of caching `_mode`. Never null now.
+   - `_dock` is null after reload and its event wiring is gone; the dock still on screen is the orphaned pre-reload one, delegates pointing at a dead plugin → tile-pick no longer sets `CurrentTileId` → paint silently dead.
+   - `[Tool][GlobalClass]` resources (`MapData`/`TileDefinition`) get re-typed → in-memory instances become bare `Resource`, so `ResolveMesh`'s `is TileDefinition` fails for every cell → all magenta.
+   - **No code makes an `EditorPlugin` survive a C# hot-reload cleanly (engine limitation).** Cure: **restart the editor** (or toggle the plugin off/on) after a C# build. Avoid leaning on background auto-build while the maptool is live — build deliberately, restart, then paint.
+6. **Half-cell offset.** `CellToLocal` shifts by `+0.5` per axis so cubes align to gridlines and floor cells sit on `y=0`. **`GridManager.CellToWorld` must match this when integrated.**
 
 ## Slice 3 — GridManager integration (the "pull") — DONE ✅
 
@@ -100,7 +107,30 @@ Run game → left-click moves on painted terrain, hover shows path+AP, skills ta
 
 ---
 
-## NEXT SESSION → Slice 4 — Object layer (the second half of the two-layer model)
+## Slice 4 — Object layer — DONE ✅
+
+**New files:**
+- `Scripts/Objects/GridObstacle.cs` — component node. Add as child of any `StaticBody3D` that blocks the grid. Self-registers on `GraphBuilt`, frees cell on `Health.OnDepleted`, exposes `MoveTo` for `ThrowAction`. Authoring: drop any StaticBody3D into the scene and add GridObstacle + Health children.
+- `Prefabs/Prefab_Crate.tscn` — crate obstacle using `Object_Crate.gltf` mesh + Health + GridObstacle + InteractionComponent + AttackAction. No extra script needed.
+
+**Changed files:**
+- `Scripts/Objects/ExplodingBarrel.cs` — stripped direct grid registration; delegates to GridObstacle child for cell state and MoveTo. Only retains explosion-specific AOE logic.
+- `Prefabs/Prefab_ExplodingBarrel.tscn` — added GridObstacle child node.
+- `Scripts/Actions/ThrowAction.cs` — generalized throw target from `is ExplodingBarrel` to `GetNodeOrNull<GridObstacle>("GridObstacle")` — works for any obstacle.
+- `Scenes/World.tscn` — placed one Crate at ~(20.5, 1.5, 7.5) for playtest.
+
+**Authoring convention (Option A settled):** hand-place in scene. No editor object-mode needed — the GridObstacle component makes any StaticBody3D a grid obstacle by default.
+
+**Verify steps:**
+1. Build + restart editor so GridObstacle.cs gets a UID.
+2. Run World.tscn → crate blocks pathfinding. Attack it to 0 HP → cell becomes walkable, units can path through.
+3. Throw a barrel → `ThrowAction` still works via GridObstacle.
+
+**Gotchas:**
+- `GridObstacle._Ready()` runs before `ExplodingBarrel._Ready()` (children first). So GridObstacle subscribes to `OnDepleted` first → `Unregister()` + `InvalidateCell()` fire before `Explode()`. `Explode()` reads `_gridObstacle.Cell` (still valid post-unregister) and does AOE only — no duplicate grid-freeing.
+- Crate UID in scene files is placeholder (`uid://cprefcrate001`). Godot rewrites it on first open — safe.
+
+## NEXT SESSION → Slice 5 — Editor polish (deferred from Slice 2)
 
 Terrain (bulk static cells) is done. Objects = sparse, destructible things that are real nodes, NOT MapData cells. See `MAPTOOL_DESIGN.md` "Layers" + "Objects".
 

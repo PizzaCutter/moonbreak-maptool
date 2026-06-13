@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using Godot;
+
 namespace Moonbreak.Maptool
 {
     // Removes the solid cell the ray actually hit (not hit+face). Plane picks erase nothing —
@@ -23,5 +26,11 @@ namespace Moonbreak.Maptool
         public MapEdit Commit() => _pending;
 
         public void Cancel() => _pending = null;
+
+        public IEnumerable<(Vector3I Cell, string TileId)> GetPreview(MapData map, PickResult pick)
+        {
+            if (pick.Hit && !pick.FromPlane && map.HasCell(pick.Cell))
+                yield return (pick.Cell, null);
+        }
     }
 }
