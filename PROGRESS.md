@@ -81,7 +81,7 @@ New 3D scene → add `MapRenderer` node → `Map` = New MapData → set `Palette
    - Any field only assigned in `_EnterTree` comes back null. Fixed for the mode by deriving `ActiveMode` from `_placeMode`/`_eraseMode` (field initializers → survive reload) + a `_bErase` bool, instead of caching `_mode`. Never null now.
    - `_dock` is null after reload and its event wiring is gone; the dock still on screen is the orphaned pre-reload one, delegates pointing at a dead plugin → tile-pick no longer sets `CurrentTileId` → paint silently dead.
    - `[Tool][GlobalClass]` resources (`MapData`/`TileDefinition`) get re-typed → in-memory instances become bare `Resource`, so `ResolveMesh`'s `is TileDefinition` fails for every cell → all magenta.
-   - **No code makes an `EditorPlugin` survive a C# hot-reload cleanly (engine limitation).** Cure: **restart the editor** (or toggle the plugin off/on) after a C# build. Avoid leaning on background auto-build while the maptool is live — build deliberately, restart, then paint.
+   - **Hot-reload recovery is now automatic.** `_Process` detects `_dock == null` (C# state wiped, Godot object stayed in tree) and calls `SetupDock()` to re-wire events + restore renderer + force `Rebuild()` to fix resource re-typing. No restart needed.
 6. **Half-cell offset.** `CellToLocal` shifts by `+0.5` per axis so cubes align to gridlines and floor cells sit on `y=0`. **`GridManager.CellToWorld` must match this when integrated.**
 
 ## Slice 3 — GridManager integration (the "pull") — DONE ✅

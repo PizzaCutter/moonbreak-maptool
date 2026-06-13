@@ -43,7 +43,17 @@ namespace Moonbreak.Maptool
         private StandardMaterial3D _ghostEraseMat;
         private BoxMesh _ghostFallbackMesh;
 
-        public override void _EnterTree()
+        public override void _EnterTree() => SetupDock();
+
+        // Hot-reload recovery: after a C# assembly reload the Godot object stays in the tree
+        // but _EnterTree is NOT re-called, leaving _dock null and events dead. _Process still
+        // fires (process flag lives on the Godot-object side), so we self-heal here.
+        public override void _Process(double delta)
+        {
+            if (_dock == null) SetupDock();
+        }
+
+        private void SetupDock()
         {
             _dock = new MaptoolDock();
             _dock.TileSelected += id =>
@@ -68,7 +78,18 @@ namespace Moonbreak.Maptool
             };
             _dock.LayerChanged += layer => { _activeLayer = layer; UpdatePlane(); };
             _dock.RefreshRequested += () => _renderer?.Rebuild();
-            AddDock(_dock);  // dock carries its own Title + DefaultSlot (set in MaptoolDock ctor)
+            AddDock(_dock);
+
+            // Restore renderer from whatever is selected — critical after hot-reload where
+            // _renderer was wiped but the MapRenderer node is still in the scene.
+            foreach (var node in EditorInterface.Singleton.GetSelection().GetSelectedNodes())
+            {
+                if (node is MapRenderer mr) { _renderer = mr; break; }
+            }
+            UpdatePlane();
+            // Force a rebuild so [Tool][GlobalClass] resources get re-typed correctly.
+            // Without this, MapData/TileDefinition come back as bare Resource → all pink.
+            _renderer?.Rebuild();
         }
 
         public override void _ExitTree()
