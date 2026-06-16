@@ -45,6 +45,15 @@ namespace Moonbreak.Maptool
         private Dictionary<string, TileDefinition> _tileById;
         private Mesh _missingMesh;
 
+        // Key under which all unresolved-Id cells share one (magenta) batch.
+        private const string MissingKey = "__missing__";
+
+        // One MultiMesh batch per tile-mesh — N cells collapse to ~palette-size draw calls/nodes.
+        private readonly Dictionary<string, TileBatch> _batches = new();
+        // cell -> which batch holds it and at what instance index. The index map is what swap-pop
+        // removal keeps in sync, so single-cell edits stay O(1) with no full rebuild.
+        private readonly Dictionary<Vector3I, (string key, int index)> _cellLoc = new();
+
         public override void _Ready()
         {
             Rebuild();
@@ -62,11 +71,7 @@ namespace Moonbreak.Maptool
 
             foreach (var (cell, tileId) in Map.Enumerate())
             {
-                var mi = new MeshInstance3D { Mesh = ResolveMesh(tileId) };
-                AddChild(mi);
-                // Deliberately leave Owner null → never serialized into the scene.
-                mi.SetMeta(VisualMeta, true);
-                mi.Position = CellToLocal(cell);
+                AddToBatch(cell, tileId);
             }
 
             GD.Print($"MapRenderer: rebuilt {Map.CellCount} cells");
@@ -76,14 +81,19 @@ namespace Moonbreak.Maptool
 
         public void SetCell(Vector3I cell, string tileId)
         {
-            Map?.SetCell(cell, tileId);
-            Rebuild();  // naive for now; per-cell incremental update is a later optimization
+            if (Map == null)
+            {
+                return;
+            }
+            Map.SetCell(cell, tileId);
+            EnsureTileIndex();
+            UpdateCell(cell);
         }
 
         public void ClearCell(Vector3I cell)
         {
             Map?.ClearCell(cell);
-            Rebuild();
+            RemoveCell(cell);
         }
 
         // Undo funnel: the editor-plugin layer routes every terrain diff through here via
@@ -104,13 +114,106 @@ namespace Moonbreak.Maptool
             {
                 edit.ApplyReverse(Map);
             }
-            Rebuild();
+            // Touch only the cells the diff changed — the whole point of Stage 1. The map is the
+            // source of truth post-apply, so re-read each cell and add/update/remove its node.
+            EnsureTileIndex();
+            foreach (var cell in edit.TouchedCells)
+            {
+                UpdateCell(cell);
+            }
         }
 
         // --- Internals ---
 
+        // Add or re-batch the single cell. A tile change to a different mesh moves it between
+        // batches; same mesh is a no-op (position is fixed). Empty cell → remove instead.
+        private void UpdateCell(Vector3I cell)
+        {
+            string tileId = Map.GetTileId(cell);
+            if (tileId == null)
+            {
+                RemoveCell(cell);
+                return;
+            }
+
+            string key = BatchKey(tileId);
+            if (_cellLoc.TryGetValue(cell, out var loc))
+            {
+                if (loc.key == key)
+                {
+                    return;  // same mesh, same position → nothing to upload
+                }
+                RemoveCell(cell);  // moved to a different mesh → pull from the old batch first
+            }
+
+            AddToBatch(cell, tileId);
+        }
+
+        private void AddToBatch(Vector3I cell, string tileId)
+        {
+            string key = BatchKey(tileId);
+            TileBatch batch = GetOrCreateBatch(key, ResolveMesh(tileId));
+            int index = batch.Add(cell, new Transform3D(Basis.Identity, CellToLocal(cell)));
+            _cellLoc[cell] = (key, index);
+        }
+
+        private void RemoveCell(Vector3I cell)
+        {
+            if (!_cellLoc.TryGetValue(cell, out var loc))
+            {
+                return;
+            }
+            if (_batches.TryGetValue(loc.key, out var batch) && IsInstanceValid(batch))
+            {
+                // Swap-pop may relocate another cell into this slot — fix that cell's index.
+                Vector3I? moved = batch.RemoveAt(loc.index);
+                if (moved.HasValue)
+                {
+                    _cellLoc[moved.Value] = (loc.key, loc.index);
+                }
+            }
+            _cellLoc.Remove(cell);
+        }
+
+        private TileBatch GetOrCreateBatch(string key, Mesh mesh)
+        {
+            if (_batches.TryGetValue(key, out var batch) && IsInstanceValid(batch))
+            {
+                return batch;
+            }
+            batch = new TileBatch();
+            AddChild(batch);
+            batch.SetMeta(VisualMeta, true);  // Owner stays null → never serialized into the scene
+            batch.Init(mesh);
+            _batches[key] = batch;
+            return batch;
+        }
+
+        // Cells with an unresolved Id all share one magenta batch; everything else groups by Id
+        // (one Id == one mesh), which is exactly one MultiMesh per distinct mesh.
+        private string BatchKey(string tileId)
+        {
+            if (tileId != null && _tileById.TryGetValue(tileId, out var def) && def.Mesh != null)
+            {
+                return tileId;
+            }
+            return MissingKey;
+        }
+
+        // Tile index is built by Rebuild, but incremental edits can run before a rebuild
+        // (e.g. straight after a hot-reload). Build on demand so ResolveMesh never sees null.
+        private void EnsureTileIndex()
+        {
+            if (_tileById == null)
+            {
+                BuildTileIndex();
+            }
+        }
+
         private void Clear()
         {
+            _cellLoc.Clear();
+            _batches.Clear();
             // Sweep the live tree, not an in-memory list — survives editor script reloads.
             var stale = new List<Node>();
             foreach (var child in GetChildren())

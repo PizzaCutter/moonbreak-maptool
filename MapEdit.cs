@@ -16,6 +16,18 @@ namespace Moonbreak.Maptool
 
         public int Count => _entries.Count;
 
+        // Cells this diff touches — lets the renderer update only those, not the whole map.
+        public IEnumerable<Vector3I> TouchedCells
+        {
+            get
+            {
+                foreach (var (cell, _, _) in _entries)
+                {
+                    yield return cell;
+                }
+            }
+        }
+
         public void Add(Vector3I cell, string oldId, string newId)
         {
             _entries.Add((cell, oldId, newId));
