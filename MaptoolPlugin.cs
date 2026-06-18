@@ -55,6 +55,12 @@ namespace Moonbreak.Maptool
 
         private void SetupDock()
         {
+            // Flush tile cache first. After hot-reload, _Ready fires before _Process (before C#
+            // types re-register), so Scan's "is TileDefinition" check fails and GetAll caches
+            // an empty list. By the time SetupDock runs from _Process, types are ready — refresh
+            // here so the rebuild and dock palette both see live data.
+            TileLibrary.Refresh();
+
             _dock = new MaptoolDock();
             _dock.TileSelected += id =>
             {
@@ -80,15 +86,16 @@ namespace Moonbreak.Maptool
             _dock.RefreshRequested += () => _renderer?.Rebuild();
             AddDock(_dock);
 
-            // Restore renderer from whatever is selected — critical after hot-reload where
-            // _renderer was wiped but the MapRenderer node is still in the scene.
+            // Restore renderer: selection first (respects what the user was editing), then fall
+            // back to a tree search. The tree search is the hot-reload recovery path — after a
+            // C# reload the user may not have the MapRenderer selected, but it's always in the
+            // scene and needs a rebuild so _tileById is rebuilt with properly-typed resources.
             foreach (var node in EditorInterface.Singleton.GetSelection().GetSelectedNodes())
             {
                 if (node is MapRenderer mr) { _renderer = mr; break; }
             }
+            _renderer ??= FindInTree<MapRenderer>(EditorInterface.Singleton.GetEditedSceneRoot());
             UpdatePlane();
-            // Force a rebuild so [Tool][GlobalClass] resources get re-typed correctly.
-            // Without this, MapData/TileDefinition come back as bare Resource → all pink.
             _renderer?.Rebuild();
         }
 
@@ -327,6 +334,18 @@ namespace Moonbreak.Maptool
                 _plane.Free();
             }
             _plane = null;
+        }
+
+        private static T FindInTree<T>(Node root) where T : Node
+        {
+            if (root == null) return null;
+            if (root is T match) return match;
+            foreach (var child in root.GetChildren())
+            {
+                var found = FindInTree<T>(child);
+                if (found != null) return found;
+            }
+            return null;
         }
     }
 }

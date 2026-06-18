@@ -18,7 +18,11 @@ namespace Moonbreak.Maptool
 
         public static IReadOnlyList<TileDefinition> GetAll()
         {
-            _cache ??= Scan(DefaultDir);
+            // Rescan when null or empty. An empty result means Scan ran before C# types were
+            // re-registered after hot-reload (ResourceLoader returned bare Resources, failing
+            // the "is TileDefinition" check). Never permanently cache an empty result.
+            if (_cache is not { Count: > 0 })
+                _cache = Scan(DefaultDir);
             return _cache;
         }
 
