@@ -16,6 +16,13 @@ namespace Moonbreak.Maptool
         private readonly FloodFillMode _floodFillMode = new();
 
         private enum EditModeId { Place, Erase, BoxFill, FloodFill }
+        private static EditModeId ParseModeId(string name) => name switch
+        {
+            "Erase"     => EditModeId.Erase,
+            "BoxFill"   => EditModeId.BoxFill,
+            "FloodFill" => EditModeId.FloodFill,
+            _           => EditModeId.Place,
+        };
         private EditModeId _modeId = EditModeId.Place;
         private IEditMode ActiveMode => _modeId switch
         {
@@ -42,7 +49,6 @@ namespace Moonbreak.Maptool
 
         public override void _ExitTree()
         {
-            // Called when this node is freed. Clean up anything we added to the scene.
             HidePlane();
             _renderer = null;
             _dock = null;
@@ -62,9 +68,7 @@ namespace Moonbreak.Maptool
             }
         }
 
-        // Called by plugin.gd on first setup and after every C# assembly reload.
-        // plugin.gd removes the old dock before calling this, so we only need to create a fresh one.
-        // Uses GetParent() instead of a parameter to avoid cross-language cast ambiguity.
+        // GetParent() instead of a parameter — avoids cross-language cast ambiguity.
         public Node SetupImpl()
         {
             _owner = GetParent() as EditorPlugin;
@@ -83,13 +87,7 @@ namespace Moonbreak.Maptool
             _dock.ModeChanged += name =>
             {
                 _savedModeName = name;
-                _modeId = name switch
-                {
-                    "Erase"     => EditModeId.Erase,
-                    "BoxFill"   => EditModeId.BoxFill,
-                    "FloodFill" => EditModeId.FloodFill,
-                    _           => EditModeId.Place,
-                };
+                _modeId = ParseModeId(name);
                 ActiveMode.Cancel();
                 _bDragging = false;
                 ClearGhosts();
@@ -99,13 +97,7 @@ namespace Moonbreak.Maptool
             _owner.AddDock(_dock);  // triggers MaptoolDock._Ready() → tile list populated
 
             // Restore mode and tile selection from [Export] values that survived the reload.
-            _modeId = _savedModeName switch
-            {
-                "Erase"     => EditModeId.Erase,
-                "BoxFill"   => EditModeId.BoxFill,
-                "FloodFill" => EditModeId.FloodFill,
-                _           => EditModeId.Place,
-            };
+            _modeId = ParseModeId(_savedModeName);
             if (!string.IsNullOrEmpty(_savedTileId))
             {
                 _placeMode.CurrentTileId = _savedTileId;

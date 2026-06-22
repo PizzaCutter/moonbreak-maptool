@@ -5,13 +5,6 @@ using System.Collections.Generic;
 
 namespace Moonbreak.Maptool
 {
-    // Editor dock: pick the active tile, mode, and build layer. Pure UI — it raises C# events the
-    // plugin listens to and never touches MapData, picking, or undo itself. Built in code (no .tscn)
-    // so the addon stays a flat set of scripts.
-    //
-    // Extends EditorDock (Godot 4.6+ dock API): the dock owns its own title + default slot, so the
-    // plugin just calls AddDock(this). EditorDock is a MarginContainer (single child) — content goes
-    // in one VBox. Editor-only type → whole file is #if TOOLS.
     [Tool]
     public partial class MaptoolDock : EditorDock
     {
@@ -101,7 +94,6 @@ namespace Moonbreak.Maptool
             LayerChanged?.Invoke(_layer);
         }
 
-        // Rebuild the visible tile list from the library, filtered + ranked by the search box.
         private void Repopulate()
         {
             _tileList.Clear();
@@ -111,16 +103,10 @@ namespace Moonbreak.Maptool
             var scored = new List<(TileDefinition def, int score)>();
             foreach (var def in TileLibrary.GetAll())
             {
-                if (def == null)
-                {
-                    continue;
-                }
+                if (def == null) { continue; }
                 string label = string.IsNullOrEmpty(def.DisplayName) ? def.Id : def.DisplayName;
                 int score = FuzzySearch.Score(query, label + " " + string.Join(" ", def.Tags));
-                if (score >= 0)
-                {
-                    scored.Add((def, score));
-                }
+                if (score >= 0) { scored.Add((def, score)); }
             }
             scored.Sort((a, b) => b.score.CompareTo(a.score));
 
