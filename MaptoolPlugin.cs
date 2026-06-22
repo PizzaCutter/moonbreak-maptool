@@ -34,6 +34,8 @@ namespace Moonbreak.Maptool
 
         private bool _bDragging;
         private int _activeLayer;
+        private Camera3D _lastCamera;
+        private Vector2 _lastMousePos;
         private MeshInstance3D _plane;
 
         private const string PlaneMeta = "_maptool_plane";
@@ -151,8 +153,19 @@ namespace Moonbreak.Maptool
 
             if (@event is InputEventMouseMotion mm)
             {
+                _lastCamera = viewportCamera;
+                _lastMousePos = mm.Position;
                 UpdateGhost(viewportCamera, mm.Position);
                 return (int)EditorPlugin.AfterGuiInput.Pass;
+            }
+
+            if (@event is InputEventKey ik && ik.Pressed && _bDragging)
+            {
+                if (ActiveMode.OnKey(ik.Keycode))
+                {
+                    UpdateGhost(_lastCamera ?? viewportCamera, _lastMousePos);
+                    return (int)EditorPlugin.AfterGuiInput.Stop;
+                }
             }
 
             if (@event is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)

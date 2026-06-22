@@ -14,6 +14,7 @@ namespace Moonbreak.Maptool
 
         private Vector3I _anchor;
         private bool _bHasAnchor;
+        private int _yOffset;
         private MapEdit _pending;
 
         public void OnPick(MapData map, PickResult pick)
@@ -22,6 +23,7 @@ namespace Moonbreak.Maptool
             if (!pick.Hit || string.IsNullOrEmpty(CurrentTileId)) return;
             _anchor = TargetCell(pick);
             _bHasAnchor = true;
+            _yOffset = 0;
         }
 
         public void OnDragEnd(MapData map, PickResult pick)
@@ -30,8 +32,10 @@ namespace Moonbreak.Maptool
             if (!_bHasAnchor || !pick.Hit || string.IsNullOrEmpty(CurrentTileId)) return;
 
             var end = TargetCell(pick);
+            end.Y += _yOffset;
             _pending = BuildShellEdit(map, _anchor, end, CurrentTileId);
             _bHasAnchor = false;
+            _yOffset = 0;
         }
 
         public MapEdit Commit() => _pending;
@@ -40,6 +44,16 @@ namespace Moonbreak.Maptool
         {
             _pending = null;
             _bHasAnchor = false;
+            _yOffset = 0;
+        }
+
+        // Space = raise end corner, Ctrl = lower end corner.
+        public bool OnKey(Key key)
+        {
+            if (!_bHasAnchor) return false;
+            if (key == Key.Space) { _yOffset++; return true; }
+            if (key == Key.Ctrl)  { _yOffset--; return true; }
+            return false;
         }
 
         public IEnumerable<(Vector3I Cell, string TileId)> GetPreview(MapData map, PickResult pick)
@@ -48,6 +62,7 @@ namespace Moonbreak.Maptool
 
             var anchor = _bHasAnchor ? _anchor : TargetCell(pick);
             var hover  = TargetCell(pick);
+            hover.Y   += _yOffset;
 
             foreach (var cell in ShellCells(anchor, hover))
                 yield return (cell, CurrentTileId);

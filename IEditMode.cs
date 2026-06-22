@@ -28,6 +28,9 @@ namespace Moonbreak.Maptool
         // Reset pending state (e.g. clear a stored point A). Safe to call anytime.
         void Cancel();
 
+        // Called on key-down during an active drag. Return true to consume the event.
+        bool OnKey(Key key) => false;
+
         // Cells that WOULD be affected if the user clicked now. Called on MouseMotion, not on click.
         // Yields (cell, tileId) pairs; tileId == null means "would erase". PlaceMode/EraseMode
         // yield 0–1 entries; BoxFill/FloodFill yield many.
