@@ -20,6 +20,7 @@ namespace Moonbreak.Maptool
         public Action<int> LayerChanged;
         public Action RefreshRequested;
 
+        private Button _placeBtn, _eraseBtn, _boxFillBtn, _floodFillBtn;
         private LineEdit _search;
         private ItemList _tileList;
         private Label _selectedLabel;
@@ -46,18 +47,18 @@ namespace Moonbreak.Maptool
             var modeRow = new HBoxContainer();
             root.AddChild(modeRow);
             var group = new ButtonGroup();
-            var placeBtn    = new Button { Text = "Place",     ToggleMode = true, ButtonGroup = group, ButtonPressed = true };
-            var eraseBtn    = new Button { Text = "Erase",     ToggleMode = true, ButtonGroup = group };
-            var boxFillBtn  = new Button { Text = "BoxFill",   ToggleMode = true, ButtonGroup = group };
-            var floodFillBtn = new Button { Text = "Flood",    ToggleMode = true, ButtonGroup = group };
-            placeBtn.Pressed     += () => ModeChanged?.Invoke("Place");
-            eraseBtn.Pressed     += () => ModeChanged?.Invoke("Erase");
-            boxFillBtn.Pressed   += () => ModeChanged?.Invoke("BoxFill");
-            floodFillBtn.Pressed += () => ModeChanged?.Invoke("FloodFill");
-            modeRow.AddChild(placeBtn);
-            modeRow.AddChild(eraseBtn);
-            modeRow.AddChild(boxFillBtn);
-            modeRow.AddChild(floodFillBtn);
+            _placeBtn    = new Button { Text = "Place",   ToggleMode = true, ButtonGroup = group, ButtonPressed = true };
+            _eraseBtn    = new Button { Text = "Erase",   ToggleMode = true, ButtonGroup = group };
+            _boxFillBtn  = new Button { Text = "BoxFill", ToggleMode = true, ButtonGroup = group };
+            _floodFillBtn = new Button { Text = "Flood",  ToggleMode = true, ButtonGroup = group };
+            _placeBtn.Pressed     += () => ModeChanged?.Invoke("Place");
+            _eraseBtn.Pressed     += () => ModeChanged?.Invoke("Erase");
+            _boxFillBtn.Pressed   += () => ModeChanged?.Invoke("BoxFill");
+            _floodFillBtn.Pressed += () => ModeChanged?.Invoke("FloodFill");
+            modeRow.AddChild(_placeBtn);
+            modeRow.AddChild(_eraseBtn);
+            modeRow.AddChild(_boxFillBtn);
+            modeRow.AddChild(_floodFillBtn);
 
             // --- Active layer ---
             var layerRow = new HBoxContainer();
@@ -128,6 +129,30 @@ namespace Moonbreak.Maptool
                 _filtered.Add(def);
                 string label = string.IsNullOrEmpty(def.DisplayName) ? def.Id : def.DisplayName;
                 _tileList.AddItem(label);
+            }
+        }
+
+        public void RestoreState(string modeName, string tileId)
+        {
+            var btn = modeName switch
+            {
+                "Erase"     => _eraseBtn,
+                "BoxFill"   => _boxFillBtn,
+                "FloodFill" => _floodFillBtn,
+                _           => _placeBtn,
+            };
+            btn?.SetPressedNoSignal(true);
+
+            if (!string.IsNullOrEmpty(tileId))
+            {
+                for (int i = 0; i < _filtered.Count; i++)
+                {
+                    if (_filtered[i].Id != tileId) { continue; }
+                    _tileList.Select(i);
+                    string label = string.IsNullOrEmpty(_filtered[i].DisplayName) ? _filtered[i].Id : _filtered[i].DisplayName;
+                    _selectedLabel.Text = $"Selected: {label}";
+                    break;
+                }
             }
         }
 

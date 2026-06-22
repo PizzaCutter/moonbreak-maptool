@@ -3,24 +3,18 @@ using Godot;
 
 namespace Moonbreak.Maptool
 {
-    // Editor entry point. THE ONLY place allowed to touch editor-only APIs (viewport input,
-    // EditorUndoRedoManager, docks) — the portable core (MapData, MapRenderer, TileDefinition,
-    // CellPicker, IEditMode) stays editor-independent so a future in-game editor reuses it and
-    // swaps only this driver. See MAPTOOL_DESIGN.md "Undo/redo" + "Edit modes".
     [Tool]
-    public partial class MaptoolPlugin : EditorPlugin
+    public partial class MaptoolPlugin : Node
     {
+        private EditorPlugin _owner;
         private MaptoolDock _dock;
-        private MapRenderer _renderer;   // the MapRenderer currently being edited, or null
+        private MapRenderer _renderer;
 
         private readonly PlaceMode _placeMode = new();
         private readonly EraseMode _eraseMode = new();
         private readonly BoxFillMode _boxFillMode = new();
         private readonly FloodFillMode _floodFillMode = new();
 
-        // Derived, not cached: a C# hot-reload reconstructs the plugin WITHOUT re-running _EnterTree,
-        // so any field only assigned there comes back null. The mode instances have field initializers
-        // (survive reload) and _modeId defaults to Place → ActiveMode is never null.
         private enum EditModeId { Place, Erase, BoxFill, FloodFill }
         private EditModeId _modeId = EditModeId.Place;
         private IEditMode ActiveMode => _modeId switch
@@ -32,38 +26,55 @@ namespace Moonbreak.Maptool
         };
 
         private bool _bDragging;
-
         private int _activeLayer;
         private MeshInstance3D _plane;
 
-        private const string PlaneMeta  = "_maptool_plane";
-        private const string GhostMeta  = "_maptool_ghost";
+        private const string PlaneMeta = "_maptool_plane";
+        private const string GhostMeta = "_maptool_ghost";
+
+        // [Export] so these survive C# reload — Godot restores exported properties after reload.
+        [Export] private string _savedTileId = "";
+        [Export] private string _savedModeName = "Place";
 
         private StandardMaterial3D _ghostPlaceMat;
         private StandardMaterial3D _ghostEraseMat;
         private BoxMesh _ghostFallbackMesh;
 
-        public override void _EnterTree() => SetupDock();
-
-        // Hot-reload recovery: after a C# assembly reload the Godot object stays in the tree
-        // but _EnterTree is NOT re-called, leaving _dock null and events dead. _Process still
-        // fires (process flag lives on the Godot-object side), so we self-heal here.
-        public override void _Process(double delta)
+        public override void _ExitTree()
         {
-            if (_dock == null) SetupDock();
+            // Called when this node is freed. Clean up anything we added to the scene.
+            HidePlane();
+            _renderer = null;
+            _dock = null;
         }
 
-        private void SetupDock()
+        public override void _Process(double delta)
         {
-            // Flush tile cache first. After hot-reload, _Ready fires before _Process (before C#
-            // types re-register), so Scan's "is TileDefinition" check fails and GetAll caches
-            // an empty list. By the time SetupDock runs from _Process, types are ready — refresh
-            // here so the rebuild and dock palette both see live data.
+            // Retry renderer lookup each frame until found. SetupImpl may run before
+            // GetEditedSceneRoot() is ready (scene briefly null during C# reload).
+            if (_owner == null || _renderer != null) { return; }
+            _renderer = FindInTree<MapRenderer>(EditorInterface.Singleton.GetEditedSceneRoot());
+            if (_renderer != null)
+            {
+                TileLibrary.Refresh();
+                UpdatePlane();
+                _renderer.Rebuild();
+            }
+        }
+
+        // Called by plugin.gd on first setup and after every C# assembly reload.
+        // plugin.gd removes the old dock before calling this, so we only need to create a fresh one.
+        // Uses GetParent() instead of a parameter to avoid cross-language cast ambiguity.
+        public Node SetupImpl()
+        {
+            _owner = GetParent() as EditorPlugin;
+
             TileLibrary.Refresh();
 
             _dock = new MaptoolDock();
             _dock.TileSelected += id =>
             {
+                _savedTileId = id;
                 _placeMode.CurrentTileId = id;
                 _boxFillMode.CurrentTileId = id;
                 _floodFillMode.CurrentTileId = id;
@@ -71,6 +82,7 @@ namespace Moonbreak.Maptool
             };
             _dock.ModeChanged += name =>
             {
+                _savedModeName = name;
                 _modeId = name switch
                 {
                     "Erase"     => EditModeId.Erase,
@@ -84,12 +96,24 @@ namespace Moonbreak.Maptool
             };
             _dock.LayerChanged += layer => { _activeLayer = layer; UpdatePlane(); };
             _dock.RefreshRequested += () => _renderer?.Rebuild();
-            AddDock(_dock);
+            _owner.AddDock(_dock);  // triggers MaptoolDock._Ready() → tile list populated
 
-            // Restore renderer: selection first (respects what the user was editing), then fall
-            // back to a tree search. The tree search is the hot-reload recovery path — after a
-            // C# reload the user may not have the MapRenderer selected, but it's always in the
-            // scene and needs a rebuild so _tileById is rebuilt with properly-typed resources.
+            // Restore mode and tile selection from [Export] values that survived the reload.
+            _modeId = _savedModeName switch
+            {
+                "Erase"     => EditModeId.Erase,
+                "BoxFill"   => EditModeId.BoxFill,
+                "FloodFill" => EditModeId.FloodFill,
+                _           => EditModeId.Place,
+            };
+            if (!string.IsNullOrEmpty(_savedTileId))
+            {
+                _placeMode.CurrentTileId = _savedTileId;
+                _boxFillMode.CurrentTileId = _savedTileId;
+                _floodFillMode.CurrentTileId = _savedTileId;
+            }
+            _dock.RestoreState(_savedModeName, _savedTileId);
+
             foreach (var node in EditorInterface.Singleton.GetSelection().GetSelectedNodes())
             {
                 if (node is MapRenderer mr) { _renderer = mr; break; }
@@ -97,29 +121,28 @@ namespace Moonbreak.Maptool
             _renderer ??= FindInTree<MapRenderer>(EditorInterface.Singleton.GetEditedSceneRoot());
             UpdatePlane();
             _renderer?.Rebuild();
+
+            _mySessionId = _sessionId;
+            return _dock;
         }
 
-        public override void _ExitTree()
-        {
-            HidePlane();
-            if (_dock != null)
-            {
-                RemoveDock(_dock);
-                _dock.QueueFree();  // AddDock docs: caller must free the dock on cleanup
-                _dock = null;
-            }
-        }
+        // Unique value generated when the C# assembly loads. Always different across reloads.
+        private static readonly int _sessionId = System.Environment.TickCount;
+        // Reset to -1 by field initializer on every reload — never matches _sessionId until SetupImpl runs.
+        private int _mySessionId = -1;
 
-        // Take over editing when a MapRenderer is selected.
-        public override bool _Handles(GodotObject @object) => @object is MapRenderer;
+        // GDScript polls this. Returns false after any C# reload regardless of whether _dock was preserved.
+        public bool IsInitialized() => _mySessionId == _sessionId;
 
-        public override void _Edit(GodotObject @object)
+        public bool HandlesImpl(GodotObject @object) => @object is MapRenderer;
+
+        public void EditImpl(GodotObject @object)
         {
             _renderer = @object as MapRenderer;
             UpdatePlane();
         }
 
-        public override void _MakeVisible(bool visible)
+        public void MakeVisibleImpl(bool visible)
         {
             if (!visible)
             {
@@ -129,17 +152,15 @@ namespace Moonbreak.Maptool
             }
         }
 
-        public override int _Forward3DGuiInput(Camera3D viewportCamera, InputEvent @event)
+        public int Forward3DGuiInputImpl(Camera3D viewportCamera, InputEvent @event)
         {
             if (_renderer == null || _renderer.Map == null)
-            {
-                return (int)AfterGuiInput.Pass;
-            }
+                return (int)EditorPlugin.AfterGuiInput.Pass;
 
             if (@event is InputEventMouseMotion mm)
             {
                 UpdateGhost(viewportCamera, mm.Position);
-                return (int)AfterGuiInput.Pass;  // never consume motion — camera still needs it
+                return (int)EditorPlugin.AfterGuiInput.Pass;
             }
 
             if (@event is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)
@@ -148,19 +169,18 @@ namespace Moonbreak.Maptool
                 {
                     bool consumed = BeginInput(viewportCamera, mb.Position);
                     if (consumed) UpdateGhost(viewportCamera, mb.Position);
-                    return consumed ? (int)AfterGuiInput.Stop : (int)AfterGuiInput.Pass;
+                    return consumed ? (int)EditorPlugin.AfterGuiInput.Stop : (int)EditorPlugin.AfterGuiInput.Pass;
                 }
                 if (!mb.Pressed && _bDragging)
                 {
                     EndDrag(viewportCamera, mb.Position);
                     UpdateGhost(viewportCamera, mb.Position);
-                    return (int)AfterGuiInput.Stop;
+                    return (int)EditorPlugin.AfterGuiInput.Stop;
                 }
             }
-            return (int)AfterGuiInput.Pass;
+            return (int)EditorPlugin.AfterGuiInput.Pass;
         }
 
-        // Mouse-down: anchor drag modes or commit single-click modes immediately.
         private bool BeginInput(Camera3D camera, Vector2 mousePos)
         {
             PickResult pick = PickFromMouse(camera, mousePos);
@@ -177,13 +197,12 @@ namespace Moonbreak.Maptool
 
             MapEdit edit = mode.Commit();
             mode.Cancel();
-            if (edit == null || edit.Count == 0) return true;  // valid click, nothing changed
+            if (edit == null || edit.Count == 0) return true;
 
             CommitEdit(mode.Name, edit);
             return true;
         }
 
-        // Mouse-up: finish a drag-mode edit and push it to undo history.
         private void EndDrag(Camera3D camera, Vector2 mousePos)
         {
             _bDragging = false;
@@ -208,14 +227,12 @@ namespace Moonbreak.Maptool
 
         private void CommitEdit(string modeName, MapEdit edit)
         {
-            EditorUndoRedoManager undo = GetUndoRedo();
+            EditorUndoRedoManager undo = _owner.GetUndoRedo();
             undo.CreateAction(modeName + " tile");
             undo.AddDoMethod(_renderer, MapRenderer.MethodName.ApplyEdit, edit, true);
             undo.AddUndoMethod(_renderer, MapRenderer.MethodName.ApplyEdit, edit, false);
             undo.CommitAction();
         }
-
-        // --- Ghost preview: translucent cells showing what the active mode would paint ---
 
         private void UpdateGhost(Camera3D camera, Vector2 mousePos)
         {
@@ -234,7 +251,6 @@ namespace Moonbreak.Maptool
             bool bErase = tileId == null;
             float cs = _renderer.CellSize;
 
-            // Resolve mesh and whether it uses a bottom-centre pivot (tile mesh) or centre pivot (BoxMesh).
             Mesh mesh;
             bool bBottomPivot;
             if (!bErase)
@@ -257,7 +273,6 @@ namespace Moonbreak.Maptool
             }
             else
             {
-                // Slightly enlarged so the ghost outline sits above the existing tile without z-fighting.
                 mesh = _ghostFallbackMesh ??= new BoxMesh { Size = Vector3.One * (cs + 0.04f) };
                 bBottomPivot = false;
             }
@@ -268,8 +283,6 @@ namespace Moonbreak.Maptool
                 ? (_ghostEraseMat ??= MakeGhostMat(new Color("#FF443388")))
                 : (_ghostPlaceMat ??= MakeGhostMat(new Color("#55DDBBAA")));
 
-            // Bottom-pivot meshes (tiles): Y = cell.Y (bottom flush with cell floor).
-            // Centre-pivot meshes (BoxMesh): Y = cell.Y + 0.5 (centred in cell volume).
             float yLocal = bBottomPivot ? cell.Y * cs : (cell.Y + 0.5f) * cs;
             ghost.Position = new Vector3((cell.X + 0.5f) * cs, yLocal, (cell.Z + 0.5f) * cs);
 
@@ -295,8 +308,6 @@ namespace Moonbreak.Maptool
             CullMode     = BaseMaterial3D.CullModeEnum.Disabled,
         };
 
-        // --- Active-layer build plane: translucent visual anchor for void placement ---
-
         private void UpdatePlane()
         {
             if (_renderer == null)
@@ -307,12 +318,19 @@ namespace Moonbreak.Maptool
 
             if (_plane == null || !IsInstanceValid(_plane))
             {
+                // Remove any orphaned plane left in the renderer from a previous C# reload
+                // (after reload _plane is null here but the node may still exist in the scene).
+                foreach (var child in _renderer.GetChildren())
+                {
+                    if (child.HasMeta(PlaneMeta)) { child.Free(); break; }
+                }
+
                 _plane = new MeshInstance3D
                 {
                     Mesh = new PlaneMesh { Size = new Vector2(64, 64) },
                     MaterialOverride = new StandardMaterial3D
                     {
-                        AlbedoColor = new Color("#33CCFF22"),  // faint cyan, low alpha
+                        AlbedoColor = new Color("#33CCFF22"),
                         Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
                         ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
                         CullMode = BaseMaterial3D.CullModeEnum.Disabled,
@@ -320,19 +338,16 @@ namespace Moonbreak.Maptool
                 };
                 _plane.SetMeta(PlaneMeta, true);
                 _renderer.AddChild(_plane);
-                _plane.Owner = null;  // never serialized into the .tscn
+                _plane.Owner = null;
             }
 
-            // PlaneMesh lies in XZ (normal +Y). Sit it at the bottom of the active layer.
             _plane.Position = new Vector3(0, _activeLayer * _renderer.CellSize, 0);
         }
 
         private void HidePlane()
         {
             if (_plane != null && IsInstanceValid(_plane))
-            {
                 _plane.Free();
-            }
             _plane = null;
         }
 
