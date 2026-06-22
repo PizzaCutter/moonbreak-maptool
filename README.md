@@ -10,11 +10,12 @@ Godot 4 editor plugin for painting 3-D tile maps. Select a tile from the palette
 | **Erase** | Click-drag to erase a cuboid of cells. Single click erases one cell. |
 | **Line** | Click-drag to place tiles in a straight line from anchor to endpoint. Diagonals stay one cell thick. |
 | **Room** | Click-drag to build the outer walls of a rectangular room (XZ perimeter, full Y height). Interior cells are left empty. |
+| **Circle** | Click to set center, drag to set radius. Places a disc on the XZ plane. Space / Ctrl extrude into a cylinder. Toggle **Hollow** to place only the ring wall. |
 | **Flood** | Flood-fills all connected cells of the same tile, starting from the clicked cell. |
 
 ## Shortcuts
 
-These shortcuts are active **while dragging** in Place, Erase, or Room mode.
+These shortcuts are active **while dragging** in Place, Erase, Room, Line, or Circle mode.
 
 | Key | Action |
 |-----|--------|

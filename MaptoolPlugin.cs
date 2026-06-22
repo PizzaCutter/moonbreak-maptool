@@ -14,14 +14,16 @@ namespace Moonbreak.Maptool
         private readonly BoxFillMode _eraseMode = new() { Name = "Erase", IsErase = true };
         private readonly LineMode _lineMode = new();
         private readonly RoomMode _roomMode = new();
+        private readonly CircleMode _circleMode = new();
         private readonly FloodFillMode _floodFillMode = new();
 
-        private enum EditModeId { Place, Erase, Line, Room, FloodFill }
+        private enum EditModeId { Place, Erase, Line, Room, Circle, FloodFill }
         private static EditModeId ParseModeId(string name) => name switch
         {
             "Erase"     => EditModeId.Erase,
             "Line"      => EditModeId.Line,
             "Room"      => EditModeId.Room,
+            "Circle"    => EditModeId.Circle,
             "FloodFill" => EditModeId.FloodFill,
             _           => EditModeId.Place,
         };
@@ -31,6 +33,7 @@ namespace Moonbreak.Maptool
             EditModeId.Erase     => _eraseMode,
             EditModeId.Line      => _lineMode,
             EditModeId.Room      => _roomMode,
+            EditModeId.Circle    => _circleMode,
             EditModeId.FloodFill => _floodFillMode,
             _                    => _placeMode,
         };
@@ -84,9 +87,10 @@ namespace Moonbreak.Maptool
             _dock.TileSelected += id =>
             {
                 _savedTileId = id;
-                _placeMode.CurrentTileId = id;
-                _lineMode.CurrentTileId = id;
-                _roomMode.CurrentTileId = id;
+                _placeMode.CurrentTileId   = id;
+                _lineMode.CurrentTileId    = id;
+                _roomMode.CurrentTileId    = id;
+                _circleMode.CurrentTileId  = id;
                 _floodFillMode.CurrentTileId = id;
                 ClearGhosts();
             };
@@ -98,6 +102,7 @@ namespace Moonbreak.Maptool
                 _bDragging = false;
                 ClearGhosts();
             };
+            _dock.HollowChanged += bHollow => _circleMode.IsHollow = bHollow;
             _dock.LayerChanged += layer => { _activeLayer = layer; UpdatePlane(); };
             _dock.RefreshRequested += () => _renderer?.Rebuild();
             _owner.AddDock(_dock);  // triggers MaptoolDock._Ready() → tile list populated
@@ -106,9 +111,10 @@ namespace Moonbreak.Maptool
             _modeId = ParseModeId(_savedModeName);
             if (!string.IsNullOrEmpty(_savedTileId))
             {
-                _placeMode.CurrentTileId = _savedTileId;
-                _lineMode.CurrentTileId = _savedTileId;
-                _roomMode.CurrentTileId = _savedTileId;
+                _placeMode.CurrentTileId    = _savedTileId;
+                _lineMode.CurrentTileId     = _savedTileId;
+                _roomMode.CurrentTileId     = _savedTileId;
+                _circleMode.CurrentTileId   = _savedTileId;
                 _floodFillMode.CurrentTileId = _savedTileId;
             }
             _dock.RestoreState(_savedModeName, _savedTileId);

@@ -9,11 +9,13 @@ namespace Moonbreak.Maptool
     public partial class MaptoolDock : EditorDock
     {
         public Action<string> TileSelected;     // tile Id, or null when cleared
-        public Action<string> ModeChanged;      // "Place" | "Erase" | "Line" | "Room" | "FloodFill"
+        public Action<string> ModeChanged;      // "Place" | "Erase" | "Line" | "Room" | "Circle" | "FloodFill"
         public Action<int> LayerChanged;
+        public Action<bool> HollowChanged;
         public Action RefreshRequested;
 
-        private Button _placeBtn, _eraseBtn, _lineBtn, _roomBtn, _floodFillBtn;
+        private Button _placeBtn, _eraseBtn, _lineBtn, _roomBtn, _circleBtn, _floodFillBtn;
+        private CheckBox _hollowCheck;
         private LineEdit _search;
         private ItemList _tileList;
         private Label _selectedLabel;
@@ -44,17 +46,24 @@ namespace Moonbreak.Maptool
             _eraseBtn    = new Button { Text = "Erase",   ToggleMode = true, ButtonGroup = group };
             _lineBtn     = new Button { Text = "Line",    ToggleMode = true, ButtonGroup = group };
             _roomBtn     = new Button { Text = "Room",    ToggleMode = true, ButtonGroup = group };
+            _circleBtn   = new Button { Text = "Circle",  ToggleMode = true, ButtonGroup = group };
             _floodFillBtn = new Button { Text = "Flood",  ToggleMode = true, ButtonGroup = group };
             _placeBtn.Pressed     += () => ModeChanged?.Invoke("Place");
             _eraseBtn.Pressed     += () => ModeChanged?.Invoke("Erase");
             _lineBtn.Pressed      += () => ModeChanged?.Invoke("Line");
             _roomBtn.Pressed      += () => ModeChanged?.Invoke("Room");
+            _circleBtn.Pressed    += () => ModeChanged?.Invoke("Circle");
             _floodFillBtn.Pressed += () => ModeChanged?.Invoke("FloodFill");
             modeRow.AddChild(_placeBtn);
             modeRow.AddChild(_eraseBtn);
             modeRow.AddChild(_lineBtn);
             modeRow.AddChild(_roomBtn);
+            modeRow.AddChild(_circleBtn);
             modeRow.AddChild(_floodFillBtn);
+
+            _hollowCheck = new CheckBox { Text = "Hollow" };
+            _hollowCheck.Toggled += bPressed => HollowChanged?.Invoke(bPressed);
+            modeRow.AddChild(_hollowCheck);
 
             // --- Active layer ---
             var layerRow = new HBoxContainer();
@@ -128,6 +137,7 @@ namespace Moonbreak.Maptool
                 "Erase"     => _eraseBtn,
                 "Line"      => _lineBtn,
                 "Room"      => _roomBtn,
+                "Circle"    => _circleBtn,
                 "FloodFill" => _floodFillBtn,
                 _           => _placeBtn,
             };
