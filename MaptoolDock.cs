@@ -9,11 +9,11 @@ namespace Moonbreak.Maptool
     public partial class MaptoolDock : EditorDock
     {
         public Action<string> TileSelected;     // tile Id, or null when cleared
-        public Action<string> ModeChanged;      // "Place" | "Erase" | "BoxFill" | "FloodFill"
+        public Action<string> ModeChanged;      // "Place" | "Erase" | "Room" | "FloodFill"
         public Action<int> LayerChanged;
         public Action RefreshRequested;
 
-        private Button _placeBtn, _eraseBtn, _boxFillBtn, _floodFillBtn;
+        private Button _placeBtn, _eraseBtn, _roomBtn, _floodFillBtn;
         private LineEdit _search;
         private ItemList _tileList;
         private Label _selectedLabel;
@@ -42,15 +42,15 @@ namespace Moonbreak.Maptool
             var group = new ButtonGroup();
             _placeBtn    = new Button { Text = "Place",   ToggleMode = true, ButtonGroup = group, ButtonPressed = true };
             _eraseBtn    = new Button { Text = "Erase",   ToggleMode = true, ButtonGroup = group };
-            _boxFillBtn  = new Button { Text = "BoxFill", ToggleMode = true, ButtonGroup = group };
+            _roomBtn     = new Button { Text = "Room",    ToggleMode = true, ButtonGroup = group };
             _floodFillBtn = new Button { Text = "Flood",  ToggleMode = true, ButtonGroup = group };
             _placeBtn.Pressed     += () => ModeChanged?.Invoke("Place");
             _eraseBtn.Pressed     += () => ModeChanged?.Invoke("Erase");
-            _boxFillBtn.Pressed   += () => ModeChanged?.Invoke("BoxFill");
+            _roomBtn.Pressed      += () => ModeChanged?.Invoke("Room");
             _floodFillBtn.Pressed += () => ModeChanged?.Invoke("FloodFill");
             modeRow.AddChild(_placeBtn);
             modeRow.AddChild(_eraseBtn);
-            modeRow.AddChild(_boxFillBtn);
+            modeRow.AddChild(_roomBtn);
             modeRow.AddChild(_floodFillBtn);
 
             // --- Active layer ---
@@ -123,7 +123,7 @@ namespace Moonbreak.Maptool
             var btn = modeName switch
             {
                 "Erase"     => _eraseBtn,
-                "BoxFill"   => _boxFillBtn,
+                "Room"      => _roomBtn,
                 "FloodFill" => _floodFillBtn,
                 _           => _placeBtn,
             };

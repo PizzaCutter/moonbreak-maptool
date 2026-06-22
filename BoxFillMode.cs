@@ -5,12 +5,15 @@ namespace Moonbreak.Maptool
 {
     // Click-drag to fill a 3-D bounding box of cells. Mouse-down anchors corner A; mouse-up
     // commits everything from A to B (the full cuboid, inclusive on both ends).
+    // IsErase = true → erases the solid cells hit instead of placing. Used by the Erase and Place
+    // tools so that single-click and drag both go through the same box-fill path.
     public class BoxFillMode : IEditMode
     {
-        public string Name => "BoxFill";
+        public string Name { get; set; } = "BoxFill";
         public bool IsDragMode => true;
 
         public string CurrentTileId;
+        public bool IsErase;
 
         private Vector3I _anchor;
         private bool _bHasAnchor;
@@ -19,7 +22,9 @@ namespace Moonbreak.Maptool
         public void OnPick(MapData map, PickResult pick)
         {
             _pending = null;
-            if (!pick.Hit || string.IsNullOrEmpty(CurrentTileId)) return;
+            if (!pick.Hit) return;
+            if (IsErase && pick.FromPlane) return;
+            if (!IsErase && string.IsNullOrEmpty(CurrentTileId)) return;
             _anchor = TargetCell(pick);
             _bHasAnchor = true;
         }
@@ -27,10 +32,12 @@ namespace Moonbreak.Maptool
         public void OnDragEnd(MapData map, PickResult pick)
         {
             _pending = null;
-            if (!_bHasAnchor || !pick.Hit || string.IsNullOrEmpty(CurrentTileId)) return;
+            if (!_bHasAnchor || !pick.Hit) return;
+            if (IsErase && pick.FromPlane) return;
+            if (!IsErase && string.IsNullOrEmpty(CurrentTileId)) return;
 
             var end = TargetCell(pick);
-            _pending = BuildBoxEdit(map, _anchor, end, CurrentTileId);
+            _pending = BuildBoxEdit(map, _anchor, end, IsErase ? null : CurrentTileId);
             _bHasAnchor = false;
         }
 
@@ -44,13 +51,16 @@ namespace Moonbreak.Maptool
 
         public IEnumerable<(Vector3I Cell, string TileId)> GetPreview(MapData map, PickResult pick)
         {
-            if (string.IsNullOrEmpty(CurrentTileId) || !pick.Hit) yield break;
+            if (!pick.Hit) yield break;
+            if (IsErase && pick.FromPlane) yield break;
+            if (!IsErase && string.IsNullOrEmpty(CurrentTileId)) yield break;
 
+            string tileId = IsErase ? null : CurrentTileId;
             var anchor = _bHasAnchor ? _anchor : TargetCell(pick);
             var hover  = TargetCell(pick);
 
             foreach (var cell in BoxCells(anchor, hover))
-                yield return (cell, CurrentTileId);
+                yield return (cell, tileId);
         }
 
         private static MapEdit BuildBoxEdit(MapData map, Vector3I a, Vector3I b, string tileId)
@@ -76,7 +86,10 @@ namespace Moonbreak.Maptool
                 yield return new Vector3I(x, y, z);
         }
 
-        private static Vector3I TargetCell(PickResult pick)
-            => pick.FromPlane ? pick.Cell : pick.Cell + pick.Normal;
+        private Vector3I TargetCell(PickResult pick)
+        {
+            if (IsErase) return pick.Cell;
+            return pick.FromPlane ? pick.Cell : pick.Cell + pick.Normal;
+        }
     }
 }
