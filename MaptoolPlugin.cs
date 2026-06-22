@@ -12,13 +12,15 @@ namespace Moonbreak.Maptool
 
         private readonly BoxFillMode _placeMode = new() { Name = "Place" };
         private readonly BoxFillMode _eraseMode = new() { Name = "Erase", IsErase = true };
+        private readonly LineMode _lineMode = new();
         private readonly RoomMode _roomMode = new();
         private readonly FloodFillMode _floodFillMode = new();
 
-        private enum EditModeId { Place, Erase, Room, FloodFill }
+        private enum EditModeId { Place, Erase, Line, Room, FloodFill }
         private static EditModeId ParseModeId(string name) => name switch
         {
             "Erase"     => EditModeId.Erase,
+            "Line"      => EditModeId.Line,
             "Room"      => EditModeId.Room,
             "FloodFill" => EditModeId.FloodFill,
             _           => EditModeId.Place,
@@ -27,6 +29,7 @@ namespace Moonbreak.Maptool
         private IEditMode ActiveMode => _modeId switch
         {
             EditModeId.Erase     => _eraseMode,
+            EditModeId.Line      => _lineMode,
             EditModeId.Room      => _roomMode,
             EditModeId.FloodFill => _floodFillMode,
             _                    => _placeMode,
@@ -82,6 +85,7 @@ namespace Moonbreak.Maptool
             {
                 _savedTileId = id;
                 _placeMode.CurrentTileId = id;
+                _lineMode.CurrentTileId = id;
                 _roomMode.CurrentTileId = id;
                 _floodFillMode.CurrentTileId = id;
                 ClearGhosts();
@@ -103,6 +107,7 @@ namespace Moonbreak.Maptool
             if (!string.IsNullOrEmpty(_savedTileId))
             {
                 _placeMode.CurrentTileId = _savedTileId;
+                _lineMode.CurrentTileId = _savedTileId;
                 _roomMode.CurrentTileId = _savedTileId;
                 _floodFillMode.CurrentTileId = _savedTileId;
             }
