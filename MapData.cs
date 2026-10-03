@@ -17,9 +17,14 @@ namespace Moonbreak.Maptool
     {
         [Export] public Godot.Collections.Array<string> Palette { get; set; } = new();
         [Export] public int[] PackedCells { get; set; } = System.Array.Empty<int>();
+        // Sparse yaw per cell: [x, y, z, quarterTurns, ...], only cells with a non-zero turn. Kept
+        // apart from PackedCells so maps saved before rotation load unchanged.
+        [Export] public int[] PackedRotations { get; set; } = System.Array.Empty<int>();
 
         // cell -> palette index. Runtime cache, rebuilt lazily from PackedCells.
         private Dictionary<Vector3I, int> _lookup;
+        // cell -> quarter turns (1..3) around +Y. Absent = 0.
+        private Dictionary<Vector3I, int> _rotations;
 
         private void EnsureLoaded()
         {
@@ -33,6 +38,13 @@ namespace Moonbreak.Maptool
             {
                 var cell = new Vector3I(PackedCells[i], PackedCells[i + 1], PackedCells[i + 2]);
                 _lookup[cell] = PackedCells[i + 3];
+            }
+
+            _rotations = new Dictionary<Vector3I, int>();
+            for (int i = 0; i + 3 < PackedRotations.Length; i += 4)
+            {
+                var cell = new Vector3I(PackedRotations[i], PackedRotations[i + 1], PackedRotations[i + 2]);
+                _rotations[cell] = PackedRotations[i + 3];
             }
         }
 
@@ -49,6 +61,17 @@ namespace Moonbreak.Maptool
                 packed[w++] = index;
             }
             PackedCells = packed;
+
+            var rotations = new int[_rotations.Count * 4];
+            w = 0;
+            foreach (var (cell, turns) in _rotations)
+            {
+                rotations[w++] = cell.X;
+                rotations[w++] = cell.Y;
+                rotations[w++] = cell.Z;
+                rotations[w++] = turns;
+            }
+            PackedRotations = rotations;
         }
 
         // Returns the palette index for tileId, appending it if new.
@@ -63,17 +86,27 @@ namespace Moonbreak.Maptool
             return Palette.Count - 1;
         }
 
-        private void SetCellInternal(Vector3I cell, string tileId)
+        private void SetCellInternal(Vector3I cell, string tileId, int turns)
         {
             _lookup[cell] = PaletteIndexOf(tileId);
+            turns = Mathf.PosMod(turns, 4);
+            if (turns == 0)
+            {
+                _rotations.Remove(cell);
+            }
+            else
+            {
+                _rotations[cell] = turns;
+            }
         }
 
         // --- Public API ---
 
-        public void SetCell(Vector3I cell, string tileId)
+        // turns: quarter turns around +Y (0..3).
+        public void SetCell(Vector3I cell, string tileId, int turns = 0)
         {
             EnsureLoaded();
-            SetCellInternal(cell, tileId);
+            SetCellInternal(cell, tileId, turns);
             Flush();
         }
 
@@ -83,7 +116,7 @@ namespace Moonbreak.Maptool
             EnsureLoaded();
             foreach (var (cell, tileId) in cells)
             {
-                SetCellInternal(cell, tileId);
+                SetCellInternal(cell, tileId, 0);
             }
             Flush();
         }
@@ -93,6 +126,7 @@ namespace Moonbreak.Maptool
             EnsureLoaded();
             if (_lookup.Remove(cell))
             {
+                _rotations.Remove(cell);
                 Flush();
             }
         }
@@ -112,6 +146,13 @@ namespace Moonbreak.Maptool
                 return Palette[index];
             }
             return null;
+        }
+
+        // Quarter turns around +Y (0..3); 0 for an empty or unrotated cell.
+        public int GetRotation(Vector3I cell)
+        {
+            EnsureLoaded();
+            return _rotations.TryGetValue(cell, out int turns) ? turns : 0;
         }
 
         public IEnumerable<(Vector3I cell, string tileId)> Enumerate()

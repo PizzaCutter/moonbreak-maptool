@@ -61,7 +61,7 @@ namespace Moonbreak.Maptool
         // Object tiles (TileDefinition.Scene set): one spawned scene instance per cell. Owner stays
         // null like the batches — MapData is the record, the node is regenerated. At runtime the
         // game may free or move these (destroyed crate, shoved barrel); the map never notices.
-        private readonly Dictionary<Vector3I, (string tileId, Node3D node)> _objects = new();
+        private readonly Dictionary<Vector3I, (string tileId, int turns, Node3D node)> _objects = new();
 
         public override void _Ready()
         {
@@ -179,25 +179,19 @@ namespace Moonbreak.Maptool
 
             if (IsObjectTile(tileId))
             {
-                if (_objects.TryGetValue(cell, out var obj) && obj.tileId == tileId && IsInstanceValid(obj.node))
+                if (_objects.TryGetValue(cell, out var obj) && obj.tileId == tileId
+                    && obj.turns == Map.GetRotation(cell) && IsInstanceValid(obj.node))
                 {
-                    return;  // same object already standing here
+                    return;  // same object, same facing, already standing here
                 }
                 RemoveCell(cell);
                 SpawnObject(cell, tileId);
                 return;
             }
 
-            string key = BatchKey(tileId);
-            if (_cellLoc.TryGetValue(cell, out var loc))
-            {
-                if (loc.key == key)
-                {
-                    return;  // same mesh, same position → nothing to upload
-                }
-                RemoveCell(cell);  // moved to a different mesh → pull from the old batch first
-            }
-
+            // Re-seat unconditionally: the rotation may have changed even if the mesh didn't, and a
+            // swap-pop remove + append is O(1) anyway.
+            RemoveCell(cell);
             AddToBatch(cell, tileId);
         }
 
@@ -216,20 +210,21 @@ namespace Moonbreak.Maptool
         private void SpawnObject(Vector3I cell, string tileId)
         {
             Node3D node = _tileById[tileId].Scene.Instantiate<Node3D>();
-            // Position BEFORE AddChild: a scene that reads its position in _Ready (grid registration)
+            // Transform BEFORE AddChild: a scene that reads its position in _Ready (grid registration)
             // must already see its cell. Same bottom-center pivot as tile meshes.
-            node.Position = CellToLocal(cell);
+            int turns = Map.GetRotation(cell);
+            node.Transform = CellTransform(cell, turns);
             node.Name = $"{tileId}_{cell.X}_{cell.Y}_{cell.Z}";  // stable, addressable by NodePath
             node.SetMeta(VisualMeta, true);  // Owner stays null → never serialized into the scene
             AddChild(node);
-            _objects[cell] = (tileId, node);
+            _objects[cell] = (tileId, turns, node);
         }
 
         private void AddToBatch(Vector3I cell, string tileId)
         {
             string key = BatchKey(tileId);
             TileBatch batch = GetOrCreateBatch(key, ResolveMesh(tileId));
-            int index = batch.Add(cell, new Transform3D(Basis.Identity, CellToLocal(cell)));
+            int index = batch.Add(cell, CellTransform(cell, Map.GetRotation(cell)));
             _cellLoc[cell] = (key, index);
         }
 
@@ -366,6 +361,11 @@ namespace Moonbreak.Maptool
         // floor cell sits ON the y=0 plane (bottom at 0). Tile meshes use a bottom-center pivot
         // (centered on X/Z, origin on the bottom face — the natural Blockbench export), so we
         // shift half a cell on X/Z to center them but NOT on Y, where the mesh is already grounded.
+        // Quarter turns spin the tile around its own bottom-center pivot, so it stays in its cell.
+        public static Basis TurnBasis(int turns) => new(Vector3.Up, Mathf.PosMod(turns, 4) * Mathf.Pi * 0.5f);
+
+        private Transform3D CellTransform(Vector3I cell, int turns) => new(TurnBasis(turns), CellToLocal(cell));
+
         private Vector3 CellToLocal(Vector3I cell)
         {
             return (new Vector3(cell.X, cell.Y, cell.Z) + new Vector3(0.5f, 0f, 0.5f)) * CellSize;

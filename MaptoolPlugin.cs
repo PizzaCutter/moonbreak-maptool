@@ -41,6 +41,10 @@ namespace Moonbreak.Maptool
         };
 
         private bool _bDragging;
+        // R-key yaw in quarter turns, applied to every placed tile without auto-facing.
+        private int _rotation;
+        // Facing locked in at mouse-down, so a drag commits the turn its preview showed.
+        private int _dragTurns;
         private int _activeLayer;
         private Camera3D _lastCamera;
         private Vector2 _lastMousePos;
@@ -63,6 +67,9 @@ namespace Moonbreak.Maptool
         private StandardMaterial3D _ghostPlaceMat;
         private StandardMaterial3D _ghostEraseMat;
         private BoxMesh _ghostFallbackMesh;
+        private BoxMesh _arrowShaftMesh;
+        private PrismMesh _arrowHeadMesh;
+        private StandardMaterial3D _arrowMat;
 
         public override void _ExitTree()
         {
@@ -189,6 +196,20 @@ namespace Moonbreak.Maptool
                 return HandleRightClick(viewportCamera, rb);
             }
 
+            // R / Shift+R: turn the tile a quarter clockwise / counter-clockwise (seen from above).
+            // Consumed so it doesn't reach the editor's scale tool.
+            if (@event is InputEventKey rk && rk.Pressed && !rk.Echo && rk.Keycode == Key.R
+                && !rk.CtrlPressed && !rk.AltPressed && !rk.MetaPressed && _modeId != EditModeId.Erase)
+            {
+                _rotation = Mathf.PosMod(_rotation + (rk.ShiftPressed ? 1 : -1), 4);
+                if (_bDragging)
+                {
+                    _dragTurns = _rotation;
+                }
+                UpdateGhost(_lastCamera ?? viewportCamera, _lastMousePos);
+                return (int)EditorPlugin.AfterGuiInput.Stop;
+            }
+
             if (@event is InputEventKey ik && ik.Pressed && _bDragging)
             {
                 if (ActiveMode.OnKey(ik.Keycode))
@@ -266,6 +287,7 @@ namespace Moonbreak.Maptool
 
             IEditMode mode = ActiveMode;
             mode.OnPick(_renderer.Map, pick);
+            _dragTurns = TurnsFor(pick);
 
             if (mode.IsDragMode)
             {
@@ -277,6 +299,7 @@ namespace Moonbreak.Maptool
             mode.Cancel();
             if (edit == null || edit.Count == 0) return true;
 
+            edit.NewRotation = _dragTurns;
             CommitEdit(mode.Name, edit);
             return true;
         }
@@ -292,6 +315,7 @@ namespace Moonbreak.Maptool
             mode.Cancel();
 
             if (edit == null || edit.Count == 0) return;
+            edit.NewRotation = _dragTurns;
             CommitEdit(mode.Name, edit);
         }
 
@@ -320,23 +344,63 @@ namespace Moonbreak.Maptool
             PickResult pick = PickFromMouse(camera, mousePos);
             if (!pick.Hit) return;
 
+            int turns = _bDragging ? _dragTurns : TurnsFor(pick);
             foreach (var (cell, tileId) in ActiveMode.GetPreview(_renderer.Map, pick))
-                SpawnGhost(cell, tileId);
+                SpawnGhost(cell, tileId, turns);
         }
 
-        private void SpawnGhost(Vector3I cell, string tileId)
+        // Yaw for a placement made from this pick. A tile with an AttachDirection turns to meet the
+        // wall face that was clicked; everything else (and floor/void clicks) uses the R-key turn.
+        private int TurnsFor(PickResult pick)
+        {
+            TileDefinition def = CurrentTileDef();
+            if (def == null || def.AttachDirection == Vector3I.Zero || !pick.Hit || pick.FromPlane
+                || pick.Normal.Y != 0)
+            {
+                return _rotation;
+            }
+            Vector3 intoWall = -(Vector3)pick.Normal;
+            for (int turns = 0; turns < 4; turns++)
+            {
+                Vector3 facing = MapRenderer.TurnBasis(turns) * (Vector3)def.AttachDirection;
+                if (facing.DistanceTo(intoWall) < 0.01f)
+                {
+                    return turns;
+                }
+            }
+            return _rotation;  // AttachDirection isn't horizontal — no quarter turn can match
+        }
+
+        private TileDefinition CurrentTileDef()
+        {
+            if (string.IsNullOrEmpty(_savedTileId))
+            {
+                return null;
+            }
+            foreach (var def in TileLibrary.GetAll())
+            {
+                if (def.Id == _savedTileId)
+                {
+                    return def;
+                }
+            }
+            return null;
+        }
+
+        private void SpawnGhost(Vector3I cell, string tileId, int turns)
         {
             bool bErase = tileId == null;
             float cs = _renderer.CellSize;
 
             Mesh mesh;
             bool bBottomPivot;
+            TileDefinition tileDef = null;
             if (!bErase)
             {
                 Mesh tileMesh = null;
                 foreach (var def in TileLibrary.GetAll())
                 {
-                    if (def.Id == tileId) { tileMesh = def.Mesh; break; }
+                    if (def.Id == tileId) { tileDef = def; tileMesh = def.Mesh; break; }
                 }
                 if (tileMesh != null)
                 {
@@ -363,9 +427,60 @@ namespace Moonbreak.Maptool
 
             float yLocal = bBottomPivot ? cell.Y * cs : (cell.Y + 0.5f) * cs;
             ghost.Position = new Vector3((cell.X + 0.5f) * cs, yLocal, (cell.Z + 0.5f) * cs);
+            ghost.Basis = MapRenderer.TurnBasis(turns);
 
             _renderer.AddChild(ghost);
             ghost.Owner = null;
+
+            // Objects and wall-attached tiles often preview as a plain box, which hides the turn.
+            // Point an arrow along what matters: into the wall for AttachDirection tiles, else the
+            // tile's front (-Z). Child of the ghost, so the ghost's yaw turns it.
+            if (tileDef != null && (tileDef.Scene != null || tileDef.AttachDirection != Vector3I.Zero))
+            {
+                Vector3 dir = tileDef.AttachDirection != Vector3I.Zero
+                    ? ((Vector3)tileDef.AttachDirection).Normalized()
+                    : Vector3.Forward;
+                float midY = bBottomPivot ? 0.5f * cs : 0f;
+                AddArrow(ghost, dir, new Vector3(0f, midY, 0f), cs);
+            }
+        }
+
+        // Flat arrow from the cell centre to its edge along localDir, drawn on top of the ghost.
+        private void AddArrow(Node3D parent, Vector3 localDir, Vector3 localCenter, float cs)
+        {
+            _arrowMat ??= new StandardMaterial3D
+            {
+                AlbedoColor   = new Color("#FFCC44"),
+                ShadingMode   = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                NoDepthTest   = true,  // visible through the translucent ghost and the wall
+                RenderPriority = 1,
+            };
+            _arrowShaftMesh ??= new BoxMesh { Size = new Vector3(0.08f, 0.04f, 0.3f), Material = _arrowMat };
+            _arrowHeadMesh ??= new PrismMesh { Size = new Vector3(0.3f, 0.2f, 0.04f), Material = _arrowMat };
+
+            // Root's -Z looks along localDir; shaft and head are built pointing -Z.
+            var root = new Node3D
+            {
+                Position = localCenter,
+                Basis = Basis.LookingAt(localDir, Mathf.Abs(localDir.Y) > 0.99f ? Vector3.Forward : Vector3.Up),
+                Scale = Vector3.One * cs,
+            };
+            parent.AddChild(root);
+            root.Owner = null;
+
+            var shaft = new MeshInstance3D { Mesh = _arrowShaftMesh, Position = new Vector3(0f, 0f, -0.1f) };
+            root.AddChild(shaft);
+            shaft.Owner = null;
+
+            // PrismMesh apex is +Y; tip it onto -Z and lay it flat.
+            var head = new MeshInstance3D
+            {
+                Mesh = _arrowHeadMesh,
+                Position = new Vector3(0f, 0f, -0.35f),
+                Basis = new Basis(Vector3.Right, -Mathf.Pi * 0.5f),
+            };
+            root.AddChild(head);
+            head.Owner = null;
         }
 
         private void ClearGhosts()

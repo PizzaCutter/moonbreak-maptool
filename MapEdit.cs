@@ -14,6 +14,14 @@ namespace Moonbreak.Maptool
     {
         private readonly List<(Vector3I cell, string oldId, string newId)> _entries = new();
 
+        // Quarter turns every placed cell gets. One per edit: a mode places one tile, one way.
+        // Set by the editor layer (R key / clicked face) — modes never see rotation.
+        public int NewRotation { get; set; }
+
+        // Rotation each cell had before the edit, captured on the first forward apply (the map is
+        // exactly the pre-edit state then) so undo puts turned tiles back the way they were.
+        private Dictionary<Vector3I, int> _oldRotations;
+
         public int Count => _entries.Count;
 
         // Cells this diff touches — lets the renderer update only those, not the whole map.
@@ -35,9 +43,17 @@ namespace Moonbreak.Maptool
 
         public void ApplyForward(MapData map)
         {
+            if (_oldRotations == null)
+            {
+                _oldRotations = new Dictionary<Vector3I, int>();
+                foreach (var (cell, _, _) in _entries)
+                {
+                    _oldRotations[cell] = map.GetRotation(cell);
+                }
+            }
             foreach (var (cell, _, newId) in _entries)
             {
-                Write(map, cell, newId);
+                Write(map, cell, newId, NewRotation);
             }
         }
 
@@ -45,11 +61,13 @@ namespace Moonbreak.Maptool
         {
             foreach (var (cell, oldId, _) in _entries)
             {
-                Write(map, cell, oldId);
+                int turns = 0;
+                _oldRotations?.TryGetValue(cell, out turns);
+                Write(map, cell, oldId, turns);
             }
         }
 
-        private static void Write(MapData map, Vector3I cell, string tileId)
+        private static void Write(MapData map, Vector3I cell, string tileId, int turns)
         {
             if (tileId == null)
             {
@@ -57,7 +75,7 @@ namespace Moonbreak.Maptool
             }
             else
             {
-                map.SetCell(cell, tileId);
+                map.SetCell(cell, tileId, turns);
             }
         }
     }

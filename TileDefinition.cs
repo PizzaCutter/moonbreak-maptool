@@ -16,5 +16,9 @@ namespace Moonbreak.Maptool
         [Export] public PackedScene Scene;
         [Export] public string[] Tags = System.Array.Empty<string>();  // fuzzy-search corpus
         [Export] public bool bWalkable = true;    // core to tactics
+        // Minecraft ladder/torch placement: the local direction that should point INTO the surface
+        // you click. Placing against a wall face auto-turns the tile so this axis meets the wall.
+        // Zero = no auto-facing; the R-key rotation applies instead.
+        [Export] public Vector3I AttachDirection = Vector3I.Zero;
     }
 }

@@ -24,6 +24,16 @@ These shortcuts are active **while dragging** in Place, Erase, Room, Line, or Ci
 
 Tap repeatedly or hold to step multiple cells. The ghost preview updates live so you can see the height before releasing.
 
+## Rotation
+
+| Key | Action |
+|-----|--------|
+| `R` | Turn the tile a quarter clockwise (seen from above) |
+| `Shift+R` | Turn the tile a quarter counter-clockwise |
+
+The ghost shows the turn before you click. Works in every placing mode; undo restores the old turn.
+A tile whose definition sets **AttachDirection** (e.g. the ladder) turns itself to meet the wall face you click, Minecraft-style — no R needed. Clicking a floor or the void falls back to the R turn.
+
 In **Place** mode, a right-click (press and release without moving the mouse) erases the cell under the cursor, Minecraft-style. Holding right mouse and dragging still flies the camera.
 
 ## Workflow tips
