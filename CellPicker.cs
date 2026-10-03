@@ -22,9 +22,11 @@ namespace Moonbreak.Maptool
         // cellSize: renderer cell size. activeLayer: Y of the build plane for void placement.
         // allowPlaneFallback: editor painting wants the active-layer plane catch (build into the
         // void); gameplay picking wants a clean miss when the ray leaves the terrain.
+        // isSolid: which cells stop the ray. Null = every filled cell (editor: objects are pickable
+        // so they can be erased/built against). Gameplay passes a terrain-only test.
         public static PickResult Pick(MapData map, Vector3 localOrigin, Vector3 localDir,
                                       float cellSize, int activeLayer, bool allowPlaneFallback = true,
-                                      int maxSteps = 256)
+                                      int maxSteps = 256, System.Func<Vector3I, bool> isSolid = null)
         {
             if (map == null || cellSize <= 0f)
             {
@@ -35,7 +37,7 @@ namespace Moonbreak.Maptool
             // Work in cell units: one cell spans [c, c+1). Matches MapRenderer.CellToLocal.
             Vector3 origin = localOrigin / cellSize;
 
-            var dda = MarchSolid(map, origin, dir, maxSteps);
+            var dda = MarchSolid(isSolid ?? map.HasCell, origin, dir, maxSteps);
             if (dda.Hit)
             {
                 return dda;
@@ -51,12 +53,12 @@ namespace Moonbreak.Maptool
         }
 
         // Amanatides–Woo voxel traversal: step cell-by-cell along the ray, return the first solid cell.
-        private static PickResult MarchSolid(MapData map, Vector3 origin, Vector3 dir, int maxSteps)
+        private static PickResult MarchSolid(System.Func<Vector3I, bool> isSolid, Vector3 origin, Vector3 dir, int maxSteps)
         {
             var cell = new Vector3I(Mathf.FloorToInt(origin.X), Mathf.FloorToInt(origin.Y), Mathf.FloorToInt(origin.Z));
 
             // Already standing inside a solid cell (camera buried in terrain) — rare; report it facing up.
-            if (map.HasCell(cell))
+            if (isSolid(cell))
             {
                 return new PickResult { Hit = true, Cell = cell, Normal = Vector3I.Up, FromPlane = false };
             }
@@ -91,7 +93,7 @@ namespace Moonbreak.Maptool
                     enteredFace = new Vector3I(0, 0, -step.Z);
                 }
 
-                if (map.HasCell(cell))
+                if (isSolid(cell))
                 {
                     return new PickResult { Hit = true, Cell = cell, Normal = enteredFace, FromPlane = false };
                 }

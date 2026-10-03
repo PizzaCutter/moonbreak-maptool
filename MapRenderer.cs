@@ -38,6 +38,11 @@ namespace Moonbreak.Maptool
 
         [ExportToolButton("Rebuild")] public Callable RebuildButton => Callable.From(Rebuild);
 
+        // Neighbor update (Minecraft-style): fired after every rebuild and every applied edit, so
+        // anything shaped by its surroundings (a fence joining its neighbors) can re-check them.
+        // Parameterless on purpose — listeners are few and cheap to refresh wholesale.
+        [Signal] public delegate void MapChangedEventHandler();
+
         // Marks nodes this renderer spawned, so Clear() can sweep the live tree for them —
         // robust against editor script hot-reloads that orphan the previous batch.
         private const string VisualMeta = "_maptool_visual";
@@ -53,6 +58,10 @@ namespace Moonbreak.Maptool
         // cell -> which batch holds it and at what instance index. The index map is what swap-pop
         // removal keeps in sync, so single-cell edits stay O(1) with no full rebuild.
         private readonly Dictionary<Vector3I, (string key, int index)> _cellLoc = new();
+        // Object tiles (TileDefinition.Scene set): one spawned scene instance per cell. Owner stays
+        // null like the batches — MapData is the record, the node is regenerated. At runtime the
+        // game may free or move these (destroyed crate, shoved barrel); the map never notices.
+        private readonly Dictionary<Vector3I, (string tileId, Node3D node)> _objects = new();
 
         public override void _Ready()
         {
@@ -71,10 +80,11 @@ namespace Moonbreak.Maptool
 
             foreach (var (cell, tileId) in Map.Enumerate())
             {
-                AddToBatch(cell, tileId);
+                AddCell(cell, tileId);
             }
 
             GD.Print($"MapRenderer: rebuilt {Map.CellCount} cells");
+            EmitSignal(SignalName.MapChanged);
         }
 
         // --- Single-cell mutation hooks (used by edit modes later) ---
@@ -121,6 +131,37 @@ namespace Moonbreak.Maptool
             {
                 UpdateCell(cell);
             }
+            EmitSignal(SignalName.MapChanged);
+        }
+
+        // --- Terrain vs object queries (the game reads these; objects are not terrain) ---
+
+        public bool IsObjectTile(string tileId)
+        {
+            EnsureTileIndex();
+            return tileId != null && _tileById.TryGetValue(tileId, out var def) && def.Scene != null;
+        }
+
+        // Filled with a terrain tile (an unresolved Id counts as terrain — it renders as a block).
+        public bool IsTerrainCell(Vector3I cell)
+        {
+            string tileId = Map?.GetTileId(cell);
+            return tileId != null && !IsObjectTile(tileId);
+        }
+
+        public IEnumerable<(Vector3I cell, string tileId)> EnumerateTerrain()
+        {
+            if (Map == null)
+            {
+                yield break;
+            }
+            foreach (var (cell, tileId) in Map.Enumerate())
+            {
+                if (!IsObjectTile(tileId))
+                {
+                    yield return (cell, tileId);
+                }
+            }
         }
 
         // --- Internals ---
@@ -133,6 +174,17 @@ namespace Moonbreak.Maptool
             if (tileId == null)
             {
                 RemoveCell(cell);
+                return;
+            }
+
+            if (IsObjectTile(tileId))
+            {
+                if (_objects.TryGetValue(cell, out var obj) && obj.tileId == tileId && IsInstanceValid(obj.node))
+                {
+                    return;  // same object already standing here
+                }
+                RemoveCell(cell);
+                SpawnObject(cell, tileId);
                 return;
             }
 
@@ -149,6 +201,30 @@ namespace Moonbreak.Maptool
             AddToBatch(cell, tileId);
         }
 
+        private void AddCell(Vector3I cell, string tileId)
+        {
+            if (IsObjectTile(tileId))
+            {
+                SpawnObject(cell, tileId);
+            }
+            else
+            {
+                AddToBatch(cell, tileId);
+            }
+        }
+
+        private void SpawnObject(Vector3I cell, string tileId)
+        {
+            Node3D node = _tileById[tileId].Scene.Instantiate<Node3D>();
+            // Position BEFORE AddChild: a scene that reads its position in _Ready (grid registration)
+            // must already see its cell. Same bottom-center pivot as tile meshes.
+            node.Position = CellToLocal(cell);
+            node.Name = $"{tileId}_{cell.X}_{cell.Y}_{cell.Z}";  // stable, addressable by NodePath
+            node.SetMeta(VisualMeta, true);  // Owner stays null → never serialized into the scene
+            AddChild(node);
+            _objects[cell] = (tileId, node);
+        }
+
         private void AddToBatch(Vector3I cell, string tileId)
         {
             string key = BatchKey(tileId);
@@ -159,6 +235,15 @@ namespace Moonbreak.Maptool
 
         private void RemoveCell(Vector3I cell)
         {
+            if (_objects.Remove(cell, out var obj))
+            {
+                if (IsInstanceValid(obj.node))
+                {
+                    obj.node.Free();  // immediate, so undo/redo in one frame can't double it
+                }
+                return;
+            }
+
             if (!_cellLoc.TryGetValue(cell, out var loc))
             {
                 return;
@@ -214,6 +299,7 @@ namespace Moonbreak.Maptool
         {
             _cellLoc.Clear();
             _batches.Clear();
+            _objects.Clear();  // their nodes carry VisualMeta → freed by the sweep below
             // Sweep the live tree, not an in-memory list — survives editor script reloads.
             var stale = new List<Node>();
             foreach (var child in GetChildren())

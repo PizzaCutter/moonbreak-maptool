@@ -16,6 +16,8 @@ namespace Moonbreak.Maptool
         private readonly RoomMode _roomMode = new();
         private readonly CircleMode _circleMode = new();
         private readonly FloodFillMode _floodFillMode = new();
+        // Minecraft-style right-click break while in Place mode. Single-cell, not a drag.
+        private readonly EraseMode _quickEraseMode = new();
 
         private enum EditModeId { Place, Erase, Line, Room, Circle, FloodFill }
         private static EditModeId ParseModeId(string name) => name switch
@@ -43,6 +45,13 @@ namespace Moonbreak.Maptool
         private Camera3D _lastCamera;
         private Vector2 _lastMousePos;
         private MeshInstance3D _plane;
+
+        // Right mouse is also Godot's freelook. Track the hold so only a still click breaks a
+        // cell — any real mouse travel means the user was flying the camera.
+        private const float RightClickSlop = 4f;
+        private bool _bRightHeld;
+        private Vector2 _rightPressPos;
+        private float _rightTravel;
 
         private const string PlaneMeta = "_maptool_plane";
         private const string GhostMeta = "_maptool_ghost";
@@ -166,8 +175,18 @@ namespace Moonbreak.Maptool
             {
                 _lastCamera = viewportCamera;
                 _lastMousePos = mm.Position;
+                if (_bRightHeld)
+                {
+                    // Relative, not Position — freelook captures the cursor, so Position stalls.
+                    _rightTravel += mm.Relative.Length();
+                }
                 UpdateGhost(viewportCamera, mm.Position);
                 return (int)EditorPlugin.AfterGuiInput.Pass;
+            }
+
+            if (@event is InputEventMouseButton rb && rb.ButtonIndex == MouseButton.Right)
+            {
+                return HandleRightClick(viewportCamera, rb);
             }
 
             if (@event is InputEventKey ik && ik.Pressed && _bDragging)
@@ -194,6 +213,49 @@ namespace Moonbreak.Maptool
                     return (int)EditorPlugin.AfterGuiInput.Stop;
                 }
             }
+            return (int)EditorPlugin.AfterGuiInput.Pass;
+        }
+
+        // Place mode only: a still right-click erases the hovered cell. Press is always passed on
+        // so freelook still starts; the erase fires on release if the mouse barely moved.
+        private int HandleRightClick(Camera3D camera, InputEventMouseButton mb)
+        {
+            if (_modeId != EditModeId.Place || _bDragging)
+            {
+                _bRightHeld = false;
+                return (int)EditorPlugin.AfterGuiInput.Pass;
+            }
+
+            if (mb.Pressed)
+            {
+                _bRightHeld = true;
+                _rightPressPos = mb.Position;
+                _rightTravel = 0f;
+                return (int)EditorPlugin.AfterGuiInput.Pass;
+            }
+
+            if (!_bRightHeld)
+            {
+                return (int)EditorPlugin.AfterGuiInput.Pass;
+            }
+            _bRightHeld = false;
+            if (_rightTravel > RightClickSlop)
+            {
+                return (int)EditorPlugin.AfterGuiInput.Pass;
+            }
+
+            PickResult pick = PickFromMouse(camera, _rightPressPos);
+            _quickEraseMode.OnPick(_renderer.Map, pick);
+            MapEdit edit = _quickEraseMode.Commit();
+            _quickEraseMode.Cancel();
+            if (edit == null || edit.Count == 0)
+            {
+                return (int)EditorPlugin.AfterGuiInput.Pass;
+            }
+
+            CommitEdit(_quickEraseMode.Name, edit);
+            UpdateGhost(camera, _rightPressPos);
+            // Never Stop the release: freelook already saw the press, swallowing this leaves it stuck.
             return (int)EditorPlugin.AfterGuiInput.Pass;
         }
 

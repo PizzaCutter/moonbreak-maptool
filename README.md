@@ -24,6 +24,8 @@ These shortcuts are active **while dragging** in Place, Erase, Room, Line, or Ci
 
 Tap repeatedly or hold to step multiple cells. The ghost preview updates live so you can see the height before releasing.
 
+In **Place** mode, a right-click (press and release without moving the mouse) erases the cell under the cursor, Minecraft-style. Holding right mouse and dragging still flies the camera.
+
 ## Workflow tips
 
 - **Quick room sketch** — switch to Room, drag out the footprint on the build plane, then tap Space to extrude walls upward before releasing the mouse.

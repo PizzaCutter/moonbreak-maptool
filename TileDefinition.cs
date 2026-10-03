@@ -10,7 +10,10 @@ namespace Moonbreak.Maptool
     {
         [Export] public string Id = "";          // immutable after creation, NEVER renamed
         [Export] public string DisplayName = "";  // freely editable label
-        [Export] public Mesh Mesh;                // carries its own material
+        [Export] public Mesh Mesh;                // carries its own material; on an object tile, ghost preview only
+        // Set → object tile (Minecraft block entity): each cell instantiates this scene instead of
+        // joining a mesh batch. Not terrain — the game decides what the spawned node does.
+        [Export] public PackedScene Scene;
         [Export] public string[] Tags = System.Array.Empty<string>();  // fuzzy-search corpus
         [Export] public bool bWalkable = true;    // core to tactics
     }
