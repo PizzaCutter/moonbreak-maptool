@@ -36,6 +36,10 @@ A tile whose definition sets **AttachDirection** (e.g. the ladder) turns itself 
 
 In **Place** mode, a right-click (press and release without moving the mouse) erases the cell under the cursor, Minecraft-style. Holding right mouse and dragging still flies the camera.
 
+## Surfaces (overlay layers)
+
+A tile whose definition sets **Layer** (the `Surface: …` tiles) paints onto that layer instead of terrain. Every placing mode works: Place onto a floor's top face, Line, Circle, Flood a whole room. Only standing cells right above a floor take paint. A right-click with a surface selected lifts the surface off the floor you point at and never erases the ground. Undo covers it like any edit. The tinted plates are editor-only; in game the layer's meaning (e.g. a SurfaceState) is applied by the game.
+
 ## Workflow tips
 
 - **Quick room sketch** — switch to Room, drag out the footprint on the build plane, then tap Space to extrude walls upward before releasing the mouse.

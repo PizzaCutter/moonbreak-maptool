@@ -20,11 +20,17 @@ namespace Moonbreak.Maptool
         // Sparse yaw per cell: [x, y, z, quarterTurns, ...], only cells with a non-zero turn. Kept
         // apart from PackedCells so maps saved before rotation load unchanged.
         [Export] public int[] PackedRotations { get; set; } = System.Array.Empty<int>();
+        // Named overlay layers (e.g. "surface"): per layer, [x, y, z, paletteIndex, ...]. A layer cell
+        // is the standing cell ABOVE a floor, so it never collides with terrain/object storage.
+        // What a layer value means is the game's business — the map only stores tile Ids.
+        [Export] public Godot.Collections.Dictionary<string, int[]> PackedLayers { get; set; } = new();
 
         // cell -> palette index. Runtime cache, rebuilt lazily from PackedCells.
         private Dictionary<Vector3I, int> _lookup;
         // cell -> quarter turns (1..3) around +Y. Absent = 0.
         private Dictionary<Vector3I, int> _rotations;
+        // layer -> (cell -> palette index).
+        private Dictionary<string, Dictionary<Vector3I, int>> _layers;
 
         private void EnsureLoaded()
         {
@@ -45,6 +51,17 @@ namespace Moonbreak.Maptool
             {
                 var cell = new Vector3I(PackedRotations[i], PackedRotations[i + 1], PackedRotations[i + 2]);
                 _rotations[cell] = PackedRotations[i + 3];
+            }
+
+            _layers = new Dictionary<string, Dictionary<Vector3I, int>>();
+            foreach (var (layer, packed) in PackedLayers)
+            {
+                var cells = new Dictionary<Vector3I, int>();
+                for (int i = 0; i + 3 < packed.Length; i += 4)
+                {
+                    cells[new Vector3I(packed[i], packed[i + 1], packed[i + 2])] = packed[i + 3];
+                }
+                _layers[layer] = cells;
             }
         }
 
@@ -72,6 +89,26 @@ namespace Moonbreak.Maptool
                 rotations[w++] = turns;
             }
             PackedRotations = rotations;
+
+            var layers = new Godot.Collections.Dictionary<string, int[]>();
+            foreach (var (layer, cells) in _layers)
+            {
+                if (cells.Count == 0)
+                {
+                    continue;  // an emptied layer drops out of the .tres
+                }
+                var layerPacked = new int[cells.Count * 4];
+                w = 0;
+                foreach (var (cell, index) in cells)
+                {
+                    layerPacked[w++] = cell.X;
+                    layerPacked[w++] = cell.Y;
+                    layerPacked[w++] = cell.Z;
+                    layerPacked[w++] = index;
+                }
+                layers[layer] = layerPacked;
+            }
+            PackedLayers = layers;
         }
 
         // Returns the palette index for tileId, appending it if new.
@@ -153,6 +190,62 @@ namespace Moonbreak.Maptool
         {
             EnsureLoaded();
             return _rotations.TryGetValue(cell, out int turns) ? turns : 0;
+        }
+
+        // --- Overlay layers ---
+
+        // Tile Id on `layer` at cell, or null.
+        public string GetLayerTile(string layer, Vector3I cell)
+        {
+            EnsureLoaded();
+            if (_layers.TryGetValue(layer, out var cells) && cells.TryGetValue(cell, out int index)
+                && index >= 0 && index < Palette.Count)
+            {
+                return Palette[index];
+            }
+            return null;
+        }
+
+        // null tileId clears the cell on that layer.
+        public void SetLayerTile(string layer, Vector3I cell, string tileId)
+        {
+            EnsureLoaded();
+            if (!_layers.TryGetValue(layer, out var cells))
+            {
+                cells = new Dictionary<Vector3I, int>();
+                _layers[layer] = cells;
+            }
+            if (tileId == null)
+            {
+                cells.Remove(cell);
+            }
+            else
+            {
+                cells[cell] = PaletteIndexOf(tileId);
+            }
+            Flush();
+        }
+
+        public IEnumerable<string> LayerNames
+        {
+            get
+            {
+                EnsureLoaded();
+                return new List<string>(_layers.Keys);
+            }
+        }
+
+        public IEnumerable<(Vector3I cell, string tileId)> EnumerateLayer(string layer)
+        {
+            EnsureLoaded();
+            if (!_layers.TryGetValue(layer, out var cells))
+            {
+                yield break;
+            }
+            foreach (var (cell, index) in cells)
+            {
+                yield return (cell, (index >= 0 && index < Palette.Count) ? Palette[index] : null);
+            }
         }
 
         public IEnumerable<(Vector3I cell, string tileId)> Enumerate()

@@ -62,6 +62,10 @@ namespace Moonbreak.Maptool
         // null like the batches — MapData is the record, the node is regenerated. At runtime the
         // game may free or move these (destroyed crate, shoved barrel); the map never notices.
         private readonly Dictionary<Vector3I, (string tileId, int turns, Node3D node)> _objects = new();
+        // Overlay-layer plates (editor only — at runtime the game draws what a layer means, e.g.
+        // SurfaceManager's own surface visuals). Same batch machinery as terrain.
+        private readonly Dictionary<(string layer, Vector3I cell), (string key, int index)> _layerLoc = new();
+        private readonly Dictionary<string, Mesh> _plateMeshes = new();
 
         public override void _Ready()
         {
@@ -81,6 +85,16 @@ namespace Moonbreak.Maptool
             foreach (var (cell, tileId) in Map.Enumerate())
             {
                 AddCell(cell, tileId);
+            }
+            if (Engine.IsEditorHint())
+            {
+                foreach (string layer in Map.LayerNames)
+                {
+                    foreach (var (cell, tileId) in Map.EnumerateLayer(layer))
+                    {
+                        AddLayerPlate(layer, cell, tileId);
+                    }
+                }
             }
 
             GD.Print($"MapRenderer: rebuilt {Map.CellCount} cells");
@@ -130,6 +144,10 @@ namespace Moonbreak.Maptool
             foreach (var cell in edit.TouchedCells)
             {
                 UpdateCell(cell);
+            }
+            foreach (var (layer, cell) in edit.TouchedLayerCells)
+            {
+                UpdateLayerCell(layer, cell);
             }
             EmitSignal(SignalName.MapChanged);
         }
@@ -255,6 +273,81 @@ namespace Moonbreak.Maptool
             _cellLoc.Remove(cell);
         }
 
+        // --- Overlay layers ---
+
+        public TileDefinition GetTileDef(string tileId)
+        {
+            EnsureTileIndex();
+            return tileId != null && _tileById.TryGetValue(tileId, out var def) ? def : null;
+        }
+
+        private void UpdateLayerCell(string layer, Vector3I cell)
+        {
+            RemoveLayerPlate(layer, cell);
+            string tileId = Map.GetLayerTile(layer, cell);
+            if (tileId != null && Engine.IsEditorHint())
+            {
+                AddLayerPlate(layer, cell, tileId);
+            }
+        }
+
+        private void AddLayerPlate(string layer, Vector3I cell, string tileId)
+        {
+            string key = "layer:" + tileId;
+            TileBatch batch = GetOrCreateBatch(key, GetPlateMesh(tileId));
+            int index = batch.Add(cell, new Transform3D(Basis.Identity, CellToLocal(cell)));
+            _layerLoc[(layer, cell)] = (key, index);
+        }
+
+        private void RemoveLayerPlate(string layer, Vector3I cell)
+        {
+            if (!_layerLoc.Remove((layer, cell), out var loc))
+            {
+                return;
+            }
+            if (_batches.TryGetValue(loc.key, out var batch) && IsInstanceValid(batch))
+            {
+                Vector3I? moved = batch.RemoveAt(loc.index);
+                if (moved.HasValue)
+                {
+                    _layerLoc[(layer, moved.Value)] = (loc.key, loc.index);
+                }
+            }
+        }
+
+        // Thin tinted slab lying on the floor's top face, centred in the standing cell.
+        public Mesh GetPlateMesh(string tileId)
+        {
+            if (_plateMeshes.TryGetValue(tileId, out var mesh))
+            {
+                return mesh;
+            }
+            Color color = GetTileDef(tileId)?.PreviewColor ?? new Color("#FFFFFF");
+            var plate = new BoxMesh
+            {
+                Size = new Vector3(CellSize * 0.94f, 0.04f, CellSize * 0.94f),
+                Material = new StandardMaterial3D
+                {
+                    AlbedoColor  = color with { A = 0.6f },
+                    Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+                    ShadingMode  = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                },
+            };
+            // Box is centre-pivoted; lift it so its underside rests just above the floor top.
+            var arrays = plate.GetMeshArrays();
+            var verts = (Vector3[])arrays[(int)Mesh.ArrayType.Vertex];
+            for (int i = 0; i < verts.Length; i++)
+            {
+                verts[i].Y += 0.03f;
+            }
+            arrays[(int)Mesh.ArrayType.Vertex] = verts;
+            var lifted = new ArrayMesh();
+            lifted.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+            lifted.SurfaceSetMaterial(0, plate.Material);
+            _plateMeshes[tileId] = lifted;
+            return lifted;
+        }
+
         private TileBatch GetOrCreateBatch(string key, Mesh mesh)
         {
             if (_batches.TryGetValue(key, out var batch) && IsInstanceValid(batch))
@@ -295,6 +388,8 @@ namespace Moonbreak.Maptool
             _cellLoc.Clear();
             _batches.Clear();
             _objects.Clear();  // their nodes carry VisualMeta → freed by the sweep below
+            _layerLoc.Clear();
+            _plateMeshes.Clear();  // PreviewColor may have changed since the last build
             // Sweep the live tree, not an in-memory list — survives editor script reloads.
             var stale = new List<Node>();
             foreach (var child in GetChildren())

@@ -20,5 +20,11 @@ namespace Moonbreak.Maptool
         // you click. Placing against a wall face auto-turns the tile so this axis meets the wall.
         // Zero = no auto-facing; the R-key rotation applies instead.
         [Export] public Vector3I AttachDirection = Vector3I.Zero;
+        // Set → overlay tile painted onto a named MapData layer instead of terrain (e.g. "surface").
+        // It sits in the standing cell above a floor. LayerValue is what the game reads it as
+        // (e.g. a SurfaceState name); PreviewColor tints its editor plate and ghost.
+        [Export] public string Layer = "";
+        [Export] public string LayerValue = "";
+        [Export] public Color PreviewColor = new("#FFFFFF");
     }
 }

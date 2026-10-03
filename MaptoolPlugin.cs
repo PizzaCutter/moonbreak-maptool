@@ -266,9 +266,20 @@ namespace Moonbreak.Maptool
             }
 
             PickResult pick = PickFromMouse(camera, _rightPressPos);
-            _quickEraseMode.OnPick(_renderer.Map, pick);
-            MapEdit edit = _quickEraseMode.Commit();
-            _quickEraseMode.Cancel();
+            MapEdit edit;
+            TileDefinition def = CurrentTileDef();
+            if (IsLayerTile(def))
+            {
+                // A surface is selected: right-click lifts that layer off the floor you point at
+                // and never touches the ground block itself.
+                edit = BuildLayerClear(def.Layer, pick);
+            }
+            else
+            {
+                _quickEraseMode.OnPick(_renderer.Map, pick);
+                edit = _quickEraseMode.Commit();
+                _quickEraseMode.Cancel();
+            }
             if (edit == null || edit.Count == 0)
             {
                 return (int)EditorPlugin.AfterGuiInput.Pass;
@@ -299,6 +310,8 @@ namespace Moonbreak.Maptool
             mode.Cancel();
             if (edit == null || edit.Count == 0) return true;
 
+            edit = ToLayerEditIfNeeded(edit);
+            if (edit == null) { return true; }
             edit.NewRotation = _dragTurns;
             CommitEdit(mode.Name, edit);
             return true;
@@ -315,6 +328,8 @@ namespace Moonbreak.Maptool
             mode.Cancel();
 
             if (edit == null || edit.Count == 0) return;
+            edit = ToLayerEditIfNeeded(edit);
+            if (edit == null) { return; }
             edit.NewRotation = _dragTurns;
             CommitEdit(mode.Name, edit);
         }
@@ -344,9 +359,82 @@ namespace Moonbreak.Maptool
             PickResult pick = PickFromMouse(camera, mousePos);
             if (!pick.Hit) return;
 
+            TileDefinition def = CurrentTileDef();
+            if (_modeId != EditModeId.Erase && IsLayerTile(def))
+            {
+                foreach (var (cell, tileId) in ActiveMode.GetPreview(_renderer.Map, pick))
+                {
+                    if (tileId != null && CanHoldLayer(cell))
+                    {
+                        SpawnLayerGhost(cell, def);
+                    }
+                }
+                return;
+            }
+
             int turns = _bDragging ? _dragTurns : TurnsFor(pick);
             foreach (var (cell, tileId) in ActiveMode.GetPreview(_renderer.Map, pick))
                 SpawnGhost(cell, tileId, turns);
+        }
+
+        // --- Overlay layers (surfaces) ---
+
+        private static bool IsLayerTile(TileDefinition def) => def != null && !string.IsNullOrEmpty(def.Layer);
+
+        // A layer cell is the open standing cell right above a terrain floor.
+        private bool CanHoldLayer(Vector3I cell)
+            => !_renderer.IsTerrainCell(cell) && _renderer.IsTerrainCell(cell + Vector3I.Down);
+
+        // Modes speak terrain: they emit "put tile X in standing cell C". With a layer tile selected
+        // that becomes "paint layer X at C" — so every placing mode paints surfaces unchanged.
+        private MapEdit ToLayerEditIfNeeded(MapEdit edit)
+        {
+            TileDefinition def = CurrentTileDef();
+            if (_modeId == EditModeId.Erase || !IsLayerTile(def))
+            {
+                return edit;
+            }
+            var layerEdit = new MapEdit();
+            foreach (var (cell, _, newId) in edit.Entries)
+            {
+                if (newId == null || !CanHoldLayer(cell))
+                {
+                    continue;
+                }
+                string oldId = _renderer.Map.GetLayerTile(def.Layer, cell);
+                if (oldId != def.Id)
+                {
+                    layerEdit.AddLayer(def.Layer, cell, oldId, def.Id);
+                }
+            }
+            return layerEdit.Count > 0 ? layerEdit : null;
+        }
+
+        private MapEdit BuildLayerClear(string layer, PickResult pick)
+        {
+            if (!pick.Hit || pick.FromPlane)
+            {
+                return null;
+            }
+            Vector3I cell = pick.Cell + Vector3I.Up;
+            string oldId = _renderer.Map.GetLayerTile(layer, cell);
+            if (oldId == null)
+            {
+                return null;
+            }
+            var edit = new MapEdit();
+            edit.AddLayer(layer, cell, oldId, null);
+            return edit;
+        }
+
+        private void SpawnLayerGhost(Vector3I cell, TileDefinition def)
+        {
+            float cs = _renderer.CellSize;
+            var ghost = new MeshInstance3D { Mesh = _renderer.GetPlateMesh(def.Id) };
+            ghost.SetMeta(GhostMeta, true);
+            ghost.Position = new Vector3((cell.X + 0.5f) * cs, cell.Y * cs + 0.01f, (cell.Z + 0.5f) * cs);
+            _renderer.AddChild(ghost);
+            ghost.Owner = null;
         }
 
         // Yaw for a placement made from this pick. A tile with an AttachDirection turns to meet the
