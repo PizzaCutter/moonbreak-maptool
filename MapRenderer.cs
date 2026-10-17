@@ -242,8 +242,35 @@ namespace Moonbreak.Maptool
         {
             string key = BatchKey(tileId);
             TileBatch batch = GetOrCreateBatch(key, ResolveMesh(tileId));
-            int index = batch.Add(cell, CellTransform(cell, Map.GetRotation(cell)));
+            int turns = Map.GetRotation(cell) + RandomTurns(cell, tileId);
+            int index = batch.Add(cell, CellTransform(cell, turns));
             _cellLoc[cell] = (key, index);
+        }
+
+        // Visual-only extra yaw for bRandomYaw terrain. Objects never get it — their facing means something.
+        private int RandomTurns(Vector3I cell, string tileId)
+        {
+            if (tileId != null && _tileById.TryGetValue(tileId, out var def) && def.bRandomYaw)
+            {
+                return CellHash(cell) & 3;
+            }
+            return 0;
+        }
+
+        // Stable position hash (Minecraft's Mth.getSeed idea). Hand-rolled on purpose: .NET's
+        // HashCode/GetHashCode are randomized per process, which would reshuffle the floor every launch.
+        public static int CellHash(Vector3I cell)
+        {
+            unchecked
+            {
+                uint h = (uint)cell.X * 73856093u ^ (uint)cell.Y * 19349663u ^ (uint)cell.Z * 83492791u;
+                h ^= h >> 16;
+                h *= 0x7FEB352Du;
+                h ^= h >> 15;
+                h *= 0x846CA68Bu;
+                h ^= h >> 16;
+                return (int)(h & 0x7FFFFFFF);
+            }
         }
 
         private void RemoveCell(Vector3I cell)

@@ -20,6 +20,11 @@ namespace Moonbreak.Maptool
         // you click. Placing against a wall face auto-turns the tile so this axis meets the wall.
         // Zero = no auto-facing; the R-key rotation applies instead.
         [Export] public Vector3I AttachDirection = Vector3I.Zero;
+        // Minecraft grass/stone variants: each cell adds a quarter-turn yaw hashed from its position,
+        // so a field of one tile stops visibly repeating. Never stored — recomputed on every build,
+        // so the R-key turn still adds on top (tap R to reroll an unlucky cell). Terrain only; for
+        // tiles whose top reads fine in all four orientations.
+        [Export] public bool bRandomYaw = false;
         // Set → overlay tile painted onto a named MapData layer instead of terrain (e.g. "surface").
         // It sits in the standing cell above a floor. LayerValue is what the game reads it as
         // (e.g. a SurfaceState name); PreviewColor tints its editor plate and ghost.
