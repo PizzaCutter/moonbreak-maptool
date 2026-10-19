@@ -59,6 +59,10 @@ namespace Moonbreak.Maptool
         private bool _bDragging;
         // R-key yaw in quarter turns, applied to every placed tile without auto-facing.
         private int _rotation;
+        // T-key axis lock. Auto = the tile decides (pillars follow the clicked face, everything else
+        // stands upright); any other value forces that axis on every placed tile.
+        private enum AxisLock { Auto, Upright, AlongX, AlongZ }
+        private AxisLock _axisLock = AxisLock.Auto;
         // Facing locked in at mouse-down, so a drag commits the turn its preview showed.
         private int _dragTurns;
         private int _activeLayer;
@@ -83,6 +87,7 @@ namespace Moonbreak.Maptool
         [Export] private string _savedMaskTileId = "";
 
         private StandardMaterial3D _ghostPlaceMat;
+        private StandardMaterial3D _ghostTintMat;
         private StandardMaterial3D _ghostEraseMat;
         private StandardMaterial3D _ghostSelectMat;
         private BoxMesh _ghostFallbackMesh;
@@ -289,7 +294,21 @@ namespace Moonbreak.Maptool
                 _rotation = Mathf.PosMod(_rotation + (rk.ShiftPressed ? 1 : -1), 4);
                 if (_bDragging)
                 {
-                    _dragTurns = _rotation;
+                    _dragTurns = ManualTurns();
+                }
+                UpdateGhost(_lastCamera ?? viewportCamera, _lastMousePos);
+                return (int)EditorPlugin.AfterGuiInput.Stop;
+            }
+
+            // T / Shift+T: cycle the axis lock forward / back (Auto → Upright → X → Z).
+            if (@event is InputEventKey tk && tk.Pressed && !tk.Echo && tk.Keycode == Key.T
+                && !tk.CtrlPressed && !tk.AltPressed && !tk.MetaPressed && PlacesCurrentTile)
+            {
+                _axisLock = (AxisLock)Mathf.PosMod((int)_axisLock + (tk.ShiftPressed ? -1 : 1), 4);
+                _dock?.SetAxisLabel(_axisLock.ToString());
+                if (_bDragging)
+                {
+                    _dragTurns = ManualTurns();
                 }
                 UpdateGhost(_lastCamera ?? viewportCamera, _lastMousePos);
                 return (int)EditorPlugin.AfterGuiInput.Stop;
@@ -801,6 +820,10 @@ namespace Moonbreak.Maptool
         // everything else (and floor/void clicks) uses the R-key turn.
         private int TurnsFor(PickResult pick)
         {
+            if (_axisLock != AxisLock.Auto)
+            {
+                return ManualTurns();
+            }
             TileDefinition def = CurrentTileDef();
             if (def != null && def.bPillar && pick.Hit && !pick.FromPlane && pick.Normal.Y == 0)
             {
@@ -822,6 +845,15 @@ namespace Moonbreak.Maptool
             }
             return _rotation;  // AttachDirection isn't horizontal — no quarter turn can match
         }
+
+        // The turn the keys alone give: R's yaw, tipped onto the locked axis. A lying tile's yaw is
+        // its axis, so R does nothing while X or Z is locked.
+        private int ManualTurns() => _axisLock switch
+        {
+            AxisLock.AlongX => MapRenderer.TiltBit | 1,
+            AxisLock.AlongZ => MapRenderer.TiltBit,
+            _               => _rotation,
+        };
 
         private TileDefinition CurrentTileDef()
         {
@@ -873,9 +905,18 @@ namespace Moonbreak.Maptool
 
             var ghost = new MeshInstance3D { Mesh = mesh };
             ghost.SetMeta(GhostMeta, true);
-            ghost.MaterialOverride = bErase
-                ? (_ghostEraseMat ??= MakeGhostMat(new Color("#FF443388")))
-                : (_ghostPlaceMat ??= MakeGhostMat(new Color("#55DDBBAA")));
+            if (!bErase && bBottomPivot)
+            {
+                // The real tile, own materials and all, so texture and turn read exactly as they'll
+                // land. A translucent blue overlay pass marks it as not placed yet.
+                ghost.MaterialOverlay = _ghostTintMat ??= MakeGhostMat(new Color("#3D8BFF73"));
+            }
+            else
+            {
+                ghost.MaterialOverride = bErase
+                    ? (_ghostEraseMat ??= MakeGhostMat(new Color("#FF443388")))
+                    : (_ghostPlaceMat ??= MakeGhostMat(new Color("#55DDBBAA")));
+            }
 
             float yLocal = bBottomPivot ? cell.Y * cs : (cell.Y + 0.5f) * cs;
             ghost.Position = new Vector3((cell.X + 0.5f) * cs, yLocal, (cell.Z + 0.5f) * cs);

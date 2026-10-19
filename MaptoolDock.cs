@@ -39,6 +39,7 @@ namespace Moonbreak.Maptool
         private ItemList _tileList;
         private Label _selectedLabel;
         private Label _layerLabel;
+        private Label _axisLabel;
 
         private readonly List<TileDefinition> _filtered = new();
         private int _layer;
@@ -119,6 +120,13 @@ namespace Moonbreak.Maptool
             layerRow.AddChild(down);
             layerRow.AddChild(_layerLabel);
             layerRow.AddChild(up);
+            _axisLabel = new Label
+            {
+                TooltipText = "T / Shift+T cycles: Auto (logs follow the clicked face), Upright, along X, along Z",
+                MouseFilter = MouseFilterEnum.Pass,
+            };
+            layerRow.AddChild(_axisLabel);
+            SetAxisLabel("Auto");
 
             // --- Mask ---
             var maskRow = new HBoxContainer();
@@ -261,6 +269,20 @@ namespace Moonbreak.Maptool
                 ?? new StyleBoxFlat { ContentMarginLeft = 8, ContentMarginRight = 8, ContentMarginTop = 4, ContentMarginBottom = 4 };
             style.BgColor = accent;
             return style;
+        }
+
+        public void SetAxisLabel(string axisLock)
+        {
+            _axisLabel.Text = $"  Axis: {axisLock} (T)";
+            if (axisLock == "Auto")
+            {
+                _axisLabel.RemoveThemeColorOverride("font_color");
+            }
+            else
+            {
+                // Same loud orange as the mask — a forgotten lock makes placement look broken.
+                _axisLabel.AddThemeColorOverride("font_color", new Color("#FFB347"));
+            }
         }
 
         public void SetLayer(int layer)

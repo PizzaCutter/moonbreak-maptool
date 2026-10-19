@@ -61,6 +61,8 @@ The ghost shows the turn before you click. Works in every placing mode; undo res
 A tile whose definition sets **AttachDirection** (e.g. the ladder) turns itself to meet the wall face you click, Minecraft-style — no R needed. Clicking a floor or the void falls back to the R turn.
 A tile whose definition sets **bPillar** (e.g. the oak log) works like a Minecraft log: click a top or bottom face and it stands upright, click a side face and it lies along that face's axis. To branch a tree, click the trunk's side.
 
+When the auto-orientation picks wrong, lock the axis: `T` / `Shift+T` cycles **Auto → Upright → along X → along Z**. Any lock but **Auto** overrides the clicked face and works on every tile, not only pillars. **Upright** still takes the R turn; X and Z ignore R. The dock shows the current lock next to the build layer, in orange while it's on.
+
 In **Place** mode, a right-click (press and release without moving the mouse) erases the cell under the cursor, Minecraft-style. Holding right mouse and dragging still flies the camera.
 
 ## Surfaces (overlay layers)
