@@ -242,7 +242,7 @@ namespace Moonbreak.Maptool
         {
             string key = BatchKey(tileId);
             TileBatch batch = GetOrCreateBatch(key, ResolveMesh(tileId));
-            int turns = Map.GetRotation(cell) + RandomTurns(cell, tileId);
+            int turns = AddYaw(Map.GetRotation(cell), RandomTurns(cell, tileId));
             int index = batch.Add(cell, CellTransform(cell, turns));
             _cellLoc[cell] = (key, index);
         }
@@ -484,9 +484,39 @@ namespace Moonbreak.Maptool
         // (centered on X/Z, origin on the bottom face — the natural Blockbench export), so we
         // shift half a cell on X/Z to center them but NOT on Y, where the mesh is already grounded.
         // Quarter turns spin the tile around its own bottom-center pivot, so it stays in its cell.
-        public static Basis TurnBasis(int turns) => new(Vector3.Up, Mathf.PosMod(turns, 4) * Mathf.Pi * 0.5f);
+        //
+        // An orientation packs yaw (bits 0-1, quarter turns around +Y) and a tilt (bit 2): tilted
+        // tips the tile onto its side first (local +Y → +Z), then the yaw spins it — so tilt+0 lies
+        // along Z, tilt+1 along X. That's all a pillar (log) needs; nothing else sets the bit.
+        public const int OrientationMask = 7;
+        public const int TiltBit = 4;
 
-        private Transform3D CellTransform(Vector3I cell, int turns) => new(TurnBasis(turns), CellToLocal(cell));
+        public static Basis TurnBasis(int turns)
+        {
+            var yaw = new Basis(Vector3.Up, (turns & 3) * Mathf.Pi * 0.5f);
+            if ((turns & TiltBit) == 0)
+            {
+                return yaw;
+            }
+            return yaw * new Basis(Vector3.Right, Mathf.Pi * 0.5f);
+        }
+
+        // Add quarter turns of yaw without carrying into the tilt bit.
+        public static int AddYaw(int turns, int extraYaw) => (turns & TiltBit) | ((turns + extraYaw) & 3);
+
+        // A bottom-pivot mesh turned by basis must still fill its cell: rotate around the cell centre,
+        // not the pivot. Zero for any yaw-only turn (the pivot already sits on the vertical axis).
+        public static Vector3 PivotShift(Basis basis, float cellSize)
+        {
+            var halfUp = new Vector3(0f, 0.5f * cellSize, 0f);
+            return halfUp - basis * halfUp;
+        }
+
+        private Transform3D CellTransform(Vector3I cell, int turns)
+        {
+            Basis basis = TurnBasis(turns);
+            return new Transform3D(basis, CellToLocal(cell) + PivotShift(basis, CellSize));
+        }
 
         private Vector3 CellToLocal(Vector3I cell)
         {

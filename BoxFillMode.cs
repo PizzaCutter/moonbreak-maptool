@@ -7,6 +7,8 @@ namespace Moonbreak.Maptool
     // commits everything from A to B (the full cuboid, inclusive on both ends).
     // IsErase = true → erases the solid cells hit instead of placing. Used by the Erase and Place
     // tools so that single-click and drag both go through the same box-fill path.
+    // IsPaint = true → retiles only the cells that already exist inside the box (blockout first,
+    // materials after). Targets the hit cell like erase; empty cells in the box are left empty.
     public class BoxFillMode : IEditMode
     {
         public string Name { get; set; } = "BoxFill";
@@ -14,6 +16,10 @@ namespace Moonbreak.Maptool
 
         public string CurrentTileId;
         public bool IsErase;
+        public bool IsPaint;
+
+        // Erase and Paint act on the cell the ray hit, so they need a solid hit, never the plane.
+        private bool TargetsHitCell => IsErase || IsPaint;
 
         private Vector3I _anchor;
         private bool _bHasAnchor;
@@ -24,7 +30,7 @@ namespace Moonbreak.Maptool
         {
             _pending = null;
             if (!pick.Hit) return;
-            if (IsErase && pick.FromPlane) return;
+            if (TargetsHitCell && pick.FromPlane) return;
             if (!IsErase && string.IsNullOrEmpty(CurrentTileId)) return;
             _anchor = TargetCell(pick);
             _bHasAnchor = true;
@@ -35,12 +41,12 @@ namespace Moonbreak.Maptool
         {
             _pending = null;
             if (!_bHasAnchor || !pick.Hit) return;
-            if (IsErase && pick.FromPlane) return;
+            if (TargetsHitCell && pick.FromPlane) return;
             if (!IsErase && string.IsNullOrEmpty(CurrentTileId)) return;
 
             var end = TargetCell(pick);
             end.Y += _yOffset;
-            _pending = BuildBoxEdit(map, _anchor, end, IsErase ? null : CurrentTileId);
+            _pending = BuildBoxEdit(map, _anchor, end, IsErase ? null : CurrentTileId, IsPaint);
             _bHasAnchor = false;
             _yOffset = 0;
         }
@@ -66,7 +72,7 @@ namespace Moonbreak.Maptool
         public IEnumerable<(Vector3I Cell, string TileId)> GetPreview(MapData map, PickResult pick)
         {
             if (!pick.Hit) yield break;
-            if (IsErase && pick.FromPlane) yield break;
+            if (TargetsHitCell && pick.FromPlane) yield break;
             if (!IsErase && string.IsNullOrEmpty(CurrentTileId)) yield break;
 
             string tileId = IsErase ? null : CurrentTileId;
@@ -75,15 +81,25 @@ namespace Moonbreak.Maptool
             hover.Y   += _yOffset;
 
             foreach (var cell in BoxCells(anchor, hover))
+            {
+                if (IsPaint && !map.HasCell(cell))
+                {
+                    continue;
+                }
                 yield return (cell, tileId);
+            }
         }
 
-        private static MapEdit BuildBoxEdit(MapData map, Vector3I a, Vector3I b, string tileId)
+        private static MapEdit BuildBoxEdit(MapData map, Vector3I a, Vector3I b, string tileId, bool bOnlyFilled)
         {
             var edit = new MapEdit();
             foreach (var cell in BoxCells(a, b))
             {
                 string oldId = map.GetTileId(cell);
+                if (bOnlyFilled && oldId == null)
+                {
+                    continue;
+                }
                 if (oldId != tileId)
                     edit.Add(cell, oldId, tileId);
             }
@@ -103,7 +119,7 @@ namespace Moonbreak.Maptool
 
         private Vector3I TargetCell(PickResult pick)
         {
-            if (IsErase) return pick.Cell;
+            if (TargetsHitCell) return pick.Cell;
             return pick.FromPlane ? pick.Cell : pick.Cell + pick.Normal;
         }
     }

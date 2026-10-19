@@ -25,6 +25,10 @@ namespace Moonbreak.Maptool
         // so the R-key turn still adds on top (tap R to reroll an unlucky cell). Terrain only; for
         // tiles whose top reads fine in all four orientations.
         [Export] public bool bRandomYaw = false;
+        // Minecraft logs/pillars: the tile's local Y axis follows the face you click. Top or bottom →
+        // upright (R still spins it), a side face → lying along that face's axis. Lets a trunk
+        // branch sideways by clicking its side.
+        [Export] public bool bPillar = false;
         // Set → overlay tile painted onto a named MapData layer instead of terrain (e.g. "surface").
         // It sits in the standing cell above a floor. LayerValue is what the game reads it as
         // (e.g. a SurfaceState name); PreviewColor tints its editor plate and ghost.

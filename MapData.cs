@@ -27,7 +27,8 @@ namespace Moonbreak.Maptool
 
         // cell -> palette index. Runtime cache, rebuilt lazily from PackedCells.
         private Dictionary<Vector3I, int> _lookup;
-        // cell -> quarter turns (1..3) around +Y. Absent = 0.
+        // cell -> orientation (1..7). Absent = 0. Bits 0-1: quarter turns around +Y; bit 2: tilted
+        // onto its side (see MapRenderer.TurnBasis). Old maps only ever stored 1..3, so they load as-is.
         private Dictionary<Vector3I, int> _rotations;
         // layer -> (cell -> palette index).
         private Dictionary<string, Dictionary<Vector3I, int>> _layers;
@@ -126,7 +127,7 @@ namespace Moonbreak.Maptool
         private void SetCellInternal(Vector3I cell, string tileId, int turns)
         {
             _lookup[cell] = PaletteIndexOf(tileId);
-            turns = Mathf.PosMod(turns, 4);
+            turns &= MapRenderer.OrientationMask;
             if (turns == 0)
             {
                 _rotations.Remove(cell);
@@ -139,7 +140,7 @@ namespace Moonbreak.Maptool
 
         // --- Public API ---
 
-        // turns: quarter turns around +Y (0..3).
+        // turns: orientation (0..7) — see the _rotations comment.
         public void SetCell(Vector3I cell, string tileId, int turns = 0)
         {
             EnsureLoaded();
@@ -154,6 +155,25 @@ namespace Moonbreak.Maptool
             foreach (var (cell, tileId) in cells)
             {
                 SetCellInternal(cell, tileId, 0);
+            }
+            Flush();
+        }
+
+        // Batch write with per-cell turns — one Flush for a whole diff. null tileId clears the cell.
+        public void WriteCells(IEnumerable<(Vector3I cell, string tileId, int turns)> cells)
+        {
+            EnsureLoaded();
+            foreach (var (cell, tileId, turns) in cells)
+            {
+                if (tileId == null)
+                {
+                    _lookup.Remove(cell);
+                    _rotations.Remove(cell);
+                }
+                else
+                {
+                    SetCellInternal(cell, tileId, turns);
+                }
             }
             Flush();
         }
@@ -185,7 +205,7 @@ namespace Moonbreak.Maptool
             return null;
         }
 
-        // Quarter turns around +Y (0..3); 0 for an empty or unrotated cell.
+        // Orientation (0..7); 0 for an empty or unrotated cell.
         public int GetRotation(Vector3I cell)
         {
             EnsureLoaded();
@@ -210,6 +230,23 @@ namespace Moonbreak.Maptool
         public void SetLayerTile(string layer, Vector3I cell, string tileId)
         {
             EnsureLoaded();
+            SetLayerTileInternal(layer, cell, tileId);
+            Flush();
+        }
+
+        // Batch form — one Flush for many layer cells.
+        public void WriteLayerTiles(IEnumerable<(string layer, Vector3I cell, string tileId)> cells)
+        {
+            EnsureLoaded();
+            foreach (var (layer, cell, tileId) in cells)
+            {
+                SetLayerTileInternal(layer, cell, tileId);
+            }
+            Flush();
+        }
+
+        private void SetLayerTileInternal(string layer, Vector3I cell, string tileId)
+        {
             if (!_layers.TryGetValue(layer, out var cells))
             {
                 cells = new Dictionary<Vector3I, int>();
@@ -223,7 +260,6 @@ namespace Moonbreak.Maptool
             {
                 cells[cell] = PaletteIndexOf(tileId);
             }
-            Flush();
         }
 
         public IEnumerable<string> LayerNames
